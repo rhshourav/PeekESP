@@ -1369,7 +1369,7 @@ static void build_splash(lv_obj_t *scr) {
   lv_obj_set_pos(sub, 136, 72);
 
   lv_obj_t *by = lv_label_create(sp);
-  lv_label_set_text(by, "by shouravx");
+  lv_label_set_text(by, "by rhshourav");
   lv_obj_set_style_text_font(by, F_SM, 0);
   lv_obj_set_style_text_color(by, COL_CYAN, 0);
   lv_obj_set_style_text_opa(by, LV_OPA_70, 0);
@@ -2576,7 +2576,7 @@ static void handle_root() {
     p += F(FW_VERSION);
     p += F(". Updating means reflashing over USB - there is no over-the-air "
            "path, because the partition table has a single app slot. "
-           "<a href='https://github.com/shouravx/PeekESP/releases' "
+           "<a href='https://github.com/rhshourav/PeekESP/releases' "
            "target=_blank rel=noopener>Release notes</a></div>");
   }
 
@@ -2748,8 +2748,8 @@ static void handle_root() {
          "you type the new code into each of them.')\">"
          "<button class=alt type=submit>Generate a new pairing code</button></form>"
          "<a class=reset href=/reset>erase all settings</a>"
-         "<p class=by>PeekESP by <a href=\"https://github.com/shouravx\">shouravx</a>"
-         " &middot; <a href=\"https://github.com/shouravx/PeekESP\">source</a></p>"
+         "<p class=by>PeekESP by <a href=\"https://github.com/rhshourav\">rhshourav</a>"
+         " &middot; <a href=\"https://github.com/rhshourav/PeekESP\">source</a></p>"
          "</main>");
 
   server.send(200, "text/html", p);
