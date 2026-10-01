@@ -41,8 +41,8 @@ Section: utils
 Priority: optional
 Architecture: all
 Depends: python3 (>= 3.6), systemd
-Maintainer: shouravx <rhshourav02@gmail.com>
-Homepage: https://github.com/shouravx/PeekESP
+Maintainer: rhshourav <rhshourav02@gmail.com>
+Homepage: https://github.com/rhshourav/PeekESP
 Description: Telemetry agent for a PeekESP display
  Pushes this machine's CPU, memory, storage, temperature and network
  throughput to a Cloudflare Worker, where an ESP32 with a small display
@@ -72,7 +72,7 @@ chmod 600 "$STAGE/etc/peekesp/agent.conf"
 cat > "$STAGE/lib/systemd/system/peek-agent.service" <<'EOF'
 [Unit]
 Description=PeekESP telemetry agent
-Documentation=https://github.com/shouravx/PeekESP
+Documentation=https://github.com/rhshourav/PeekESP
 After=network-online.target
 Wants=network-online.target
 
