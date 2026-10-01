@@ -1,10 +1,10 @@
-# Maintainer: shouravx <rhshourav02@gmail.com>
+# Maintainer: rhshourav <rhshourav02@gmail.com>
 pkgname=peekesp
 pkgver=1.2.0
 pkgrel=1
 pkgdesc="Push this machine's CPU, RAM, storage and temperature to a PeekESP display"
 arch=('any')
-url="https://github.com/shouravx/PeekESP"
+url="https://github.com/rhshourav/PeekESP"
 license=('MIT')
 # python only. The agent is standard library throughout - no psutil, no wheels,
 # nothing to resolve - which is most of why this packages cleanly at all.
@@ -27,7 +27,7 @@ package() {
   install -Dm644 /dev/stdin "${pkgdir}/usr/lib/systemd/system/peek-agent.service" <<'UNIT'
 [Unit]
 Description=PeekESP telemetry agent
-Documentation=https://github.com/shouravx/PeekESP
+Documentation=https://github.com/rhshourav/PeekESP
 After=network-online.target
 Wants=network-online.target
 
