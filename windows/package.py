@@ -10,9 +10,9 @@ Produces:
 
     dist/PeekESP-<version>-win-x64.zip
     dist/PeekESP-<version>-win-x64.zip.sha256
-    packaging/winget/<version>/shouravx.PeekESP.yaml
-                              /shouravx.PeekESP.installer.yaml
-                              /shouravx.PeekESP.locale.en-US.yaml
+    packaging/winget/<version>/rhshourav.PeekESP.yaml
+                              /rhshourav.PeekESP.installer.yaml
+                              /rhshourav.PeekESP.locale.en-US.yaml
 
 winget wants one installer per package, and this ships two executables - the
 tray app and the headless agent - so the installer is a zip of both, declared
@@ -37,8 +37,8 @@ REPO = HERE.parent
 DIST = HERE / "dist"
 WINGET = REPO / "packaging" / "winget"
 
-PACKAGE_ID = "shouravx.PeekESP"
-REPO_URL = "https://github.com/shouravx/PeekESP"
+PACKAGE_ID = "rhshourav.PeekESP"
+REPO_URL = "https://github.com/rhshourav/PeekESP"
 MANIFEST_VERSION = "1.6.0"
 
 # The tray app first: it is the one a person runs.
@@ -170,10 +170,10 @@ LOCALE_YAML = """# Created by windows/package.py
 PackageIdentifier: {pid}
 PackageVersion: {version}
 PackageLocale: en-US
-Publisher: shouravx
-PublisherUrl: https://github.com/shouravx
+Publisher: rhshourav
+PublisherUrl: https://github.com/rhshourav
 PublisherSupportUrl: {repo}/issues
-Author: shouravx
+Author: rhshourav
 PackageName: PeekESP
 PackageUrl: {repo}
 License: MIT
@@ -307,7 +307,7 @@ Next, in order - none of it has happened yet:
    beside it describe it.
 
    Fork microsoft/winget-pkgs, copy them to
-   manifests/s/shouravx/PeekESP/{version}/ and open a pull request.
+   manifests/s/rhshourav/PeekESP/{version}/ and open a pull request.
    Validate them first - this catches the schema mistakes that otherwise
    come back as a review comment days later:
 
