@@ -3,7 +3,7 @@
 Once this is in, anyone installs it with:
 
 ```powershell
-winget install shouravx.PeekESP
+winget install rhshourav.PeekESP
 ```
 
 **winget does not require code signing.** Plenty of packages in the repository
@@ -61,7 +61,7 @@ Then confirm the URL actually serves the file, because a manifest pointing at a
 404 is the single most common reason a submission bounces:
 
 ```powershell
-curl -sIL https://github.com/shouravx/PeekESP/releases/download/v1.2.0/PeekESP-1.2.0-win-x64.zip | findstr /i "HTTP content-length"
+curl -sIL https://github.com/rhshourav/PeekESP/releases/download/v1.2.0/PeekESP-1.2.0-win-x64.zip | findstr /i "HTTP content-length"
 ```
 
 ### 3. Test the manifests locally
@@ -81,7 +81,7 @@ Then check the commands exist, and remove it again:
 ```powershell
 PeekESP
 peek-agent --once
-winget uninstall shouravx.PeekESP
+winget uninstall rhshourav.PeekESP
 ```
 
 ### 4. Submit
@@ -109,9 +109,9 @@ winget uninstall shouravx.PeekESP
 Fork <https://github.com/microsoft/winget-pkgs>, then:
 
 ```
-manifests/s/shouravx/PeekESP/1.2.0/shouravx.PeekESP.yaml
-manifests/s/shouravx/PeekESP/1.2.0/shouravx.PeekESP.installer.yaml
-manifests/s/shouravx/PeekESP/1.2.0/shouravx.PeekESP.locale.en-US.yaml
+manifests/s/rhshourav/PeekESP/1.2.0/rhshourav.PeekESP.yaml
+manifests/s/rhshourav/PeekESP/1.2.0/rhshourav.PeekESP.installer.yaml
+manifests/s/rhshourav/PeekESP/1.2.0/rhshourav.PeekESP.locale.en-US.yaml
 ```
 
 The path is `manifests/<first letter, lowercase>/<Publisher>/<Package>/<Version>/`
@@ -134,7 +134,7 @@ Bump `VERSION`, run `package.py`, tag, publish, and submit the new folder. Or
 let `wingetcreate` build the update from the previous manifest:
 
 ```powershell
-wingetcreate update shouravx.PeekESP --version 1.2.0 --urls <new zip url> --submit --token <pat>
+wingetcreate update rhshourav.PeekESP --version 1.2.0 --urls <new zip url> --submit --token <pat>
 ```
 
 ## If it bounces
