@@ -1,15 +1,15 @@
 # Created by windows/package.py
-PackageIdentifier: shouravx.PeekESP
+PackageIdentifier: rhshourav.PeekESP
 PackageVersion: 1.2.0
 PackageLocale: en-US
-Publisher: shouravx
-PublisherUrl: https://github.com/shouravx
-PublisherSupportUrl: https://github.com/shouravx/PeekESP/issues
-Author: shouravx
+Publisher: rhshourav
+PublisherUrl: https://github.com/rhshourav
+PublisherSupportUrl: https://github.com/rhshourav/PeekESP/issues
+Author: rhshourav
 PackageName: PeekESP
-PackageUrl: https://github.com/shouravx/PeekESP
+PackageUrl: https://github.com/rhshourav/PeekESP
 License: MIT
-LicenseUrl: https://github.com/shouravx/PeekESP/blob/main/LICENSE
+LicenseUrl: https://github.com/rhshourav/PeekESP/blob/main/LICENSE
 Copyright: Copyright (c) 2026 MD Shourav Hossain
 ShortDescription: Live CPU, RAM, storage and network for your PC, on an ESP32 desk display.
 Description: |-
@@ -31,6 +31,6 @@ Tags:
   - monitoring
   - system-monitor
   - telemetry
-ReleaseNotesUrl: https://github.com/shouravx/PeekESP/releases/tag/v1.2.0
+ReleaseNotesUrl: https://github.com/rhshourav/PeekESP/releases/tag/v1.2.0
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
