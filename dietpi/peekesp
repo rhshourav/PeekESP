@@ -22,7 +22,7 @@
 #
 set -eu
 
-RAW_BASE="https://raw.githubusercontent.com/shouravx/PeekESP/main"
+RAW_BASE="https://raw.githubusercontent.com/rhshourav/PeekESP/main"
 # Two layouts, one script. The curl installer puts the agent in /opt because
 # that is what /opt is for - software installed outside the distribution's
 # package manager. A distribution package cannot use /opt and must use
@@ -371,7 +371,7 @@ version)
     else
         say "not installed"
     fi
-    say "source    https://github.com/shouravx/PeekESP"
+    say "source    https://github.com/rhshourav/PeekESP"
     ;;
 
 help|-h|--help)
