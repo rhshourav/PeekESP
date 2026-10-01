@@ -4,14 +4,14 @@ A physical system-metrics dashboard. An ESP32 with a 1.14" display shows live
 CPU, RAM, storage, temperature and network throughput for machines anywhere on
 the internet — no port forward, no VPN, no account.
 
-By [shouravx](https://github.com/shouravx) · MIT
+By [rhshourav](https://github.com/rhshourav) · MIT
 
 ---
 
 ## Downloads
 
 ```powershell
-winget install shouravx.PeekESP
+winget install rhshourav.PeekESP
 ```
 
 Or take what you need directly:
@@ -28,7 +28,7 @@ Or take what you need directly:
 Linux, one line:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/main/dietpi/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/main/dietpi/install.sh | sudo sh
 ```
 
 The Windows executables are **unsigned**, so SmartScreen warns the first time:
@@ -159,7 +159,7 @@ is what the settings page is for, behind its own password.
 
 ### A landing page
 
-[shouravx.github.io/PeekESP](https://shouravx.github.io/PeekESP/) — photographs
+[rhshourav.github.io/PeekESP](https://rhshourav.github.io/PeekESP/) — photographs
 of the real device, what it does, and how to flash it.
 
 ---
