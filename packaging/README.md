@@ -77,9 +77,9 @@ gpg -abs -o Release.gpg Release
 Users add it with:
 
 ```bash
-curl -fsSL https://shouravx.github.io/PeekESP/apt/peekesp.gpg \
+curl -fsSL https://.github.io/PeekESP/apt/peekesp.gpg \
   | sudo tee /etc/apt/keyrings/peekesp.gpg > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/peekesp.gpg] https://shouravx.github.io/PeekESP/apt ./" \
+echo "deb [signed-by=/etc/apt/keyrings/peekesp.gpg] https://.github.io/PeekESP/apt ./" \
   | sudo tee /etc/apt/sources.list.d/peekesp.list
 sudo apt update && sudo apt install peekesp
 ```
@@ -103,7 +103,7 @@ A different order of effort, and worth being clear about before starting:
 - After that, Ubuntu picks it up from Debian automatically.
 
 Realistically months, mostly waiting. A **Launchpad PPA** is the shortcut for
-Ubuntu specifically — same source package, no sponsor, `ppa:shouravx/peekesp` —
+Ubuntu specifically — same source package, no sponsor, `ppa:/peekesp` —
 but it is Ubuntu-only and still wants a proper `debian/` directory.
 
 ---
