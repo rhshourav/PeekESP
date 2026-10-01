@@ -15,7 +15,7 @@ your LAN.
 ## Install
 
 **HACS** — Integrations → ⋮ → Custom repositories → add
-`https://github.com/shouravx/PeekESP` as an **Integration**, then install
+`https://github.com/rhshourav/PeekESP` as an **Integration**, then install
 PeekESP and restart Home Assistant.
 
 **By hand** — copy `custom_components/peekesp/` into your
