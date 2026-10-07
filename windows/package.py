@@ -4,7 +4,7 @@ package.py - turn the built exes into a release zip and the winget manifests.
 
     python package.py                 build, zip, write the manifests
     python package.py --no-build      use whatever is already in dist/
-    python package.py --version 1.2.0 override the VERSION file
+    python package.py --version 1.2.1 override the VERSION file
 
 Produces:
 
@@ -58,7 +58,7 @@ def read_version(override):
     # winget rejects a version it cannot order, and the failure arrives as a
     # rejected pull request days later rather than here.
     if not v or not all(p.isdigit() for p in v.split(".")):
-        sys.exit(f"VERSION is {v!r}; winget wants digits and dots, like 1.2.0")
+        sys.exit(f"VERSION is {v!r}; winget wants digits and dots, like 1.2.1")
     return v
 
 

@@ -62,7 +62,7 @@ RELAY_BASE = "https://peek-relay.peekesp.workers.dev"
 # with --check. Before this the Linux agent carried no version at all, so
 # `peekesp version` could only print a path and a date, and there was nothing
 # to compare a release against.
-AGENT_VERSION = "1.2.0"
+AGENT_VERSION = "1.2.1"
 
 RELEASES_API = "https://api.github.com/repos/rhshourav/PeekESP/releases/latest"
 
