@@ -14,7 +14,7 @@ sys.path.insert(0, r"D:\GITHUB\PeekESP\windows")
 import peek_pair as pair
 
 BASE = "https://peek-relay.peekesp.workers.dev"
-UA = "PeekESP-agent/1.0 (+https://github.com/shouravx/PeekESP)"
+UA = "PeekESP-agent/1.0 (+https://github.com/rhshourav/PeekESP)"
 
 res = []
 
