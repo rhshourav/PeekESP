@@ -8,7 +8,7 @@ Same pairing code, same relay, no port forward. A Pi can watch the machines
 and it appears in its own carousel.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/main/pi/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/main/pi/install.sh | sudo sh
 ```
 
 It asks which panel is wired up, installs **only** that panel's driver, enables
