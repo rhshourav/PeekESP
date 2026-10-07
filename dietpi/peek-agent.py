@@ -12,7 +12,7 @@ install on a DietPi.
       "battery_charging": true, "battery_ac": true, "battery_minutes": 134,
       "uptime_seconds": 271830, "net_rx_kbps": 128.4, "net_tx_kbps": 12.9 }
 
-Install it:  curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/\\
+Install it:  curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/\\
              main/dietpi/install.sh | sudo sh
 Pair it:     python3 peek-agent.py --pair-code K7M2-P4QX-9R --no-serve
 Serve it:    python3 peek-agent.py          # JSON on :8080, for a LAN device
@@ -52,7 +52,7 @@ CPU_ZONE_HINTS = ("x86_pkg_temp", "coretemp", "cpu-thermal", "cpu_thermal",
 # with error 1010, before the Worker ever runs - so a push would fail with an
 # opaque 403 that no amount of checking tokens would explain. Identify
 # ourselves properly instead.
-USER_AGENT = "PeekESP-agent/1.0 (+https://github.com/shouravx/PeekESP)"
+USER_AGENT = "PeekESP-agent/1.0 (+https://github.com/rhshourav/PeekESP)"
 
 # The same relay the firmware ships pointing at, so a pairing code alone is
 # enough on both sides and there is no URL to copy anywhere.
@@ -64,7 +64,7 @@ RELAY_BASE = "https://peek-relay.peekesp.workers.dev"
 # to compare a release against.
 AGENT_VERSION = "1.2.0"
 
-RELEASES_API = "https://api.github.com/repos/shouravx/PeekESP/releases/latest"
+RELEASES_API = "https://api.github.com/repos/rhshourav/PeekESP/releases/latest"
 
 
 # --------------------------------------------------------------------------
