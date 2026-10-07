@@ -620,11 +620,11 @@ def open_settings(runner):
     updates.start()
     root.after(2500, show_update)
 
-    by = tk.Label(body, text="PeekESP by shouravx  ·  github.com/shouravx/PeekESP",
+    by = tk.Label(body, text="PeekESP by rhshourav  ·  github.com/rhshourav/PeekESP",
                   bg=BG, fg=DIM, font=("Segoe UI", 8), cursor="hand2")
     by.pack(anchor="w", pady=(4, 0))
     by.bind("<Button-1>",
-            lambda _e: webbrowser.open("https://github.com/shouravx/PeekESP"))
+            lambda _e: webbrowser.open("https://github.com/rhshourav/PeekESP"))
     by.bind("<Enter>", lambda _e: by.config(fg=CYAN))
     by.bind("<Leave>", lambda _e: by.config(fg=DIM))
 
