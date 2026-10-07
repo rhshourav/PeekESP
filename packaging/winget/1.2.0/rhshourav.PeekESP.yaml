@@ -1,5 +1,5 @@
 # Created by windows/package.py
-PackageIdentifier: shouravx.PeekESP
+PackageIdentifier: rhshourav.PeekESP
 PackageVersion: 1.2.0
 DefaultLocale: en-US
 ManifestType: version
