@@ -128,7 +128,7 @@ The relay has three modes, all on one deployment:
 
 | | |
 |---|---|
-| **This repository** | [Download ZIP](https://github.com/shouravx/PeekESP/archive/refs/heads/main.zip) &middot; `git clone https://github.com/shouravx/PeekESP.git` |
+| **This repository** | [Download ZIP](https://github.com/rhshourav/PeekESP/archive/refs/heads/main.zip) &middot; `git clone https://github.com/rhshourav/PeekESP.git` |
 | **Windows app** | build it: `cd windows && python build.py` &rarr; `dist/PeekESP.exe` |
 | **Arduino IDE** | [arduino.cc/en/software](https://www.arduino.cc/en/software) |
 | **Python 3** | [python.org/downloads](https://www.python.org/downloads/) — needed only for the setup scripts and the agent |
@@ -185,7 +185,7 @@ sketch without build flags the Arduino IDE has no way to set.
 you, then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/main/dietpi/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/main/dietpi/install.sh | sudo sh
 ```
 
 It asks for the pairing code and derives everything else — relay URL, stream,
@@ -200,7 +200,7 @@ Afterwards everything is managed with the `peekesp` command it installs —
 To skip the prompt, or to run it from a script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/main/dietpi/install.sh | sudo sh -s -- K7M2-P4QX-9R
+curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/main/dietpi/install.sh | sudo sh -s -- K7M2-P4QX-9R
 ```
 
 Piping a script from the internet into a root shell means trusting whatever is
@@ -208,7 +208,7 @@ at that URL. Read it first if you would rather — that is the honest advice, no
 a formality:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/shouravx/PeekESP/main/dietpi/install.sh
+curl -fsSLO https://raw.githubusercontent.com/rhshourav/PeekESP/main/dietpi/install.sh
 less install.sh && sudo sh install.sh
 ```
 
@@ -217,10 +217,10 @@ less install.sh && sudo sh install.sh
 lands:
 
 ```powershell
-winget install shouravx.PeekESP
+winget install rhshourav.PeekESP
 ```
 
-Until then, grab the zip from [Releases](https://github.com/shouravx/PeekESP/releases),
+Until then, grab the zip from [Releases](https://github.com/rhshourav/PeekESP/releases),
 or run it from source:
 
 ```bash
@@ -372,7 +372,7 @@ claim.
 ### A Raspberry Pi instead of an ESP32
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/main/pi/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/main/pi/install.sh | sudo sh
 ```
 
 Drives every panel above *plus* the ones the firmware cannot: SSD1306 OLED,
@@ -388,7 +388,7 @@ in its own carousel.
 
 ### Home Assistant
 
-Add `https://github.com/shouravx/PeekESP` to HACS as an **Integration**, then
+Add `https://github.com/rhshourav/PeekESP` to HACS as an **Integration**, then
 pair with the same code. One device per monitored machine — CPU, memory,
 storage, temperature, throughput, battery, last boot — plus buttons that drive
 the ESP32 display: identify, refresh, wake, standby, reboot.
