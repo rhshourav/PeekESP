@@ -11,7 +11,7 @@ systemd and Python 3.6 or later.
 Flash the device first, so it has a pairing code on screen. Then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/main/dietpi/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/main/dietpi/install.sh | sudo sh
 ```
 
 It asks for the code and derives everything else locally. Nothing else is typed,
@@ -20,7 +20,7 @@ and nothing is configured on the relay.
 Non-interactively — the code as an argument:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/main/dietpi/install.sh | sudo sh -s -- K7M2-P4QX-9R
+curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/main/dietpi/install.sh | sudo sh -s -- K7M2-P4QX-9R
 ```
 
 Piping a script from the internet into a root shell means trusting whatever is
@@ -28,7 +28,7 @@ at that URL. If you would rather read it first — and that is genuinely the
 better habit, not a disclaimer:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/shouravx/PeekESP/main/dietpi/install.sh
+curl -fsSLO https://raw.githubusercontent.com/rhshourav/PeekESP/main/dietpi/install.sh
 less install.sh && sudo sh install.sh
 ```
 
