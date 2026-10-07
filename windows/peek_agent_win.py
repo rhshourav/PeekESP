@@ -29,7 +29,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BIND = "0.0.0.0"
-PORT = 8080
+PORT = 6595
 PATH = "/telemetry"
 DISK = os.environ.get("SystemDrive", "C:") + "\\"
 SAMPLE_SECONDS = 2.0
@@ -247,7 +247,7 @@ TEMP_TTL = 20.0
 # A machine with no usable source at all backs off rather than launching
 # PowerShell every 20 seconds until the end of time.
 TEMP_TTL_MAX = 300.0
-LHM_PORTS = (8085, 8086)
+LHM_PORTS = (6596, 6597)
 
 
 def _powershell(command, timeout=8):

@@ -153,7 +153,7 @@ export PEEK_PUSH_TOKEN=...
 python3 peek-agent.py --push https://peek-relay.peekesp.workers.dev/ingest
 ```
 
-Add `--no-serve` if you do not also want the local `:8080` endpoint.
+Add `--no-serve` if you do not also want the local `:6595` endpoint.
 
 ---
 

@@ -2,7 +2,7 @@
 """
 peek-agent.py - the telemetry endpoint PeekESP polls.
 
-Serves the JSON that PeekESP.ino expects on http://0.0.0.0:8080/telemetry.
+Serves the JSON that PeekESP.ino expects on http://0.0.0.0:6595/telemetry.
 Pure standard library, reads /proc directly - no psutil, no pip, nothing to
 install on a DietPi.
 
@@ -15,7 +15,7 @@ install on a DietPi.
 Install it:  curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/\\
              main/dietpi/install.sh | sudo sh
 Pair it:     python3 peek-agent.py --pair-code K7M2-P4QX-9R --no-serve
-Serve it:    python3 peek-agent.py          # JSON on :8080, for a LAN device
+Serve it:    python3 peek-agent.py          # JSON on :6595, for a LAN device
 
 See dietpi/README.md for the rest.
 """
@@ -31,7 +31,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BIND = "0.0.0.0"          # must NOT be 127.0.0.1, or the tunnel cannot reach it
-PORT = 8080
+PORT = 6595
 PATH = "/telemetry"
 SAMPLE_SECONDS = 2.0      # how often the background sampler takes a reading
 
@@ -677,7 +677,7 @@ def main():
         return
 
     # Listening is opt-in as soon as something is being pushed. Opening
-    # 0.0.0.0:8080 as a side effect of pushing is a port on the LAN that nobody
+    # 0.0.0.0:6595 as a side effect of pushing is a port on the LAN that nobody
     # asked for; --serve turns it back on for a device that polls directly.
     serving = args.serve or not args.push
     if args.no_serve:

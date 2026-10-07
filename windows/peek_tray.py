@@ -39,14 +39,14 @@ else:
     ICON = Path(__file__).resolve().parent.parent / "img" / "logo.ico"
 
 # ---- palette, matching the device's own UI -------------------------------
-BG = "#0B0F17"
-CARD = "#121A28"
+BG = "#030405"
+CARD = "#141D2C"
 EDGE = "#1E2A3C"
 TEXT = "#E6EDF7"
 DIM = "#7C8CA3"
 CYAN = "#00E5FF"
-MAGENTA = "#FF2E7E"
-GREEN = "#35F2A0"
+MAGENTA = "#FF2176"
+GREEN = "#19E68D"
 AMBER = "#FFC145"
 RED = "#FF4D6D"
 

@@ -11,7 +11,7 @@ this, not a fallback.
       "relay_url": "https://peek-relay.you.workers.dev/ingest/alice",
       "token": "…",
       "interval": 5.0,
-      "serve_port": 8080,
+      "serve_port": 6595,
       "autostart": false
     }
 """
@@ -39,7 +39,7 @@ DEFAULTS = {
     # flashing it, which is otherwise a value you have to keep on a sticky note.
     "device_token": "",
     "interval": 5.0,
-    "serve_port": 8080,
+    "serve_port": 6595,
     "autostart": False,
 }
 
@@ -112,7 +112,7 @@ def validate(cfg: dict) -> dict:
     except (TypeError, ValueError):
         cfg["interval"] = DEFAULTS["interval"]
     try:
-        port = int(cfg.get("serve_port", 8080))
+        port = int(cfg.get("serve_port", 6595))
         cfg["serve_port"] = port if 1 <= port <= 65535 else DEFAULTS["serve_port"]
     except (TypeError, ValueError):
         cfg["serve_port"] = DEFAULTS["serve_port"]

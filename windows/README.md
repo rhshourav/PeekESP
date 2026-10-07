@@ -98,7 +98,7 @@ without restarting.
   "token": "…",
   "device_token": "…",
   "interval": 5.0,
-  "serve_port": 8080,
+  "serve_port": 6595,
   "autostart": false
 }
 ```

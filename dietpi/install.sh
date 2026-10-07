@@ -163,7 +163,7 @@ PEEK_INTERVAL=5
 # A different Worker, if you deployed your own.
 PEEK_RELAY_BASE=https://peek-relay.peekesp.workers.dev
 
-# Also answer on :8080, for a device polling over the same LAN. Off by
+# Also answer on :6595, for a device polling over the same LAN. Off by
 # default: an open port is not something pushing telemetry should imply.
 PEEK_SERVE=0
 EOF
