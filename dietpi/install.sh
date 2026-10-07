@@ -2,7 +2,7 @@
 #
 # PeekESP agent installer for DietPi, Raspberry Pi OS, Debian and Ubuntu.
 #
-#   curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/main/dietpi/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/main/dietpi/install.sh | sudo sh
 #
 # It asks for the pairing code the device is showing, and everything else -
 # relay URL, stream, push token - is derived from it locally. Nothing else is
@@ -16,7 +16,7 @@
 # is at that URL. If you would rather read it first - and you should - download
 # it, look at it, then run it:
 #
-#   curl -fsSLO https://raw.githubusercontent.com/shouravx/PeekESP/main/dietpi/install.sh
+#   curl -fsSLO https://raw.githubusercontent.com/rhshourav/PeekESP/main/dietpi/install.sh
 #   less install.sh && sudo sh install.sh
 #
 # Removing it again:
@@ -25,7 +25,7 @@
 #
 set -eu
 
-RAW_BASE="https://raw.githubusercontent.com/shouravx/PeekESP/main"
+RAW_BASE="https://raw.githubusercontent.com/rhshourav/PeekESP/main"
 PREFIX="/opt/peekesp"
 CONF_DIR="/etc/peekesp"
 CONF="$CONF_DIR/agent.conf"
@@ -174,7 +174,7 @@ step "Installing the service"
 cat > "$UNIT" <<EOF
 [Unit]
 Description=PeekESP telemetry agent
-Documentation=https://github.com/shouravx/PeekESP
+Documentation=https://github.com/rhshourav/PeekESP
 After=network-online.target
 Wants=network-online.target
 
