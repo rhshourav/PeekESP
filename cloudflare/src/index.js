@@ -121,7 +121,7 @@ async function latestFirmware() {
   if (fwCache.tag && now - fwCache.at < FW_CACHE_MS) return fwCache.tag;
   try {
     const r = await fetch(
-      "https://api.github.com/repos/shouravx/PeekESP/releases/latest",
+      "https://api.github.com/repos/rhshourav/PeekESP/releases/latest",
       {
         headers: {
           // GitHub rejects requests with no user agent outright.
