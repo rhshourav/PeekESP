@@ -19,10 +19,10 @@ import peek_pair as pair
 
 # Cloudflare's edge bans the default "Python-urllib/3.x" user agent outright
 # with error 1010, and GitHub rejects a request with no user agent at all.
-USER_AGENT = "PeekESP-app/1.0 (+https://github.com/shouravx/PeekESP)"
+USER_AGENT = "PeekESP-app/1.0 (+https://github.com/rhshourav/PeekESP)"
 
-RELEASES_API = "https://api.github.com/repos/shouravx/PeekESP/releases/latest"
-RELEASES_PAGE = "https://github.com/shouravx/PeekESP/releases"
+RELEASES_API = "https://api.github.com/repos/rhshourav/PeekESP/releases/latest"
+RELEASES_PAGE = "https://github.com/rhshourav/PeekESP/releases"
 
 # Commands the relay will accept. Duplicated from the Worker on purpose: the
 # app should refuse an unknown verb before spending a request finding out, and
