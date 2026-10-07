@@ -4,6 +4,7 @@
 - [Configuration Reference](Configuration-Reference)
 - [Runbook](Runbook)
 - [Troubleshooting](Troubleshooting)
+- - [mysys2 python env error](mysys2_python_env_error)
 
 ---
 
