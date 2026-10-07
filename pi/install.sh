@@ -2,7 +2,7 @@
 #
 # install.sh - put the PeekESP display on a Raspberry Pi.
 #
-#   curl -fsSL https://raw.githubusercontent.com/shouravx/PeekESP/main/pi/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/rhshourav/PeekESP/main/pi/install.sh | sudo sh
 #
 # Asks which panel is wired up, installs only that panel's driver, and starts a
 # systemd service. Nothing is installed for a panel you do not have: luma.lcd,
@@ -11,7 +11,7 @@
 #
 set -eu
 
-REPO_RAW="https://raw.githubusercontent.com/shouravx/PeekESP/main"
+REPO_RAW="https://raw.githubusercontent.com/rhshourav/PeekESP/main"
 PREFIX="/opt/peekesp-display"
 CONF_DIR="/etc/peekesp"
 CONF="$CONF_DIR/display.conf"
@@ -208,7 +208,7 @@ chmod 0600 "$CONF"
 cat > "$UNIT" <<EOF
 [Unit]
 Description=PeekESP display
-Documentation=https://github.com/shouravx/PeekESP/blob/main/pi/README.md
+Documentation=https://github.com/rhshourav/PeekESP/blob/main/pi/README.md
 After=network-online.target
 Wants=network-online.target
 
