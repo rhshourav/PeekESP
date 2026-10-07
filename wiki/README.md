@@ -1,7 +1,7 @@
 # Wiki source
 
 These files are the source of truth for the
-[GitHub wiki](https://github.com/shouravx/PeekESP/wiki). They live in the main
+[GitHub wiki](https://github.com/rhshourav/PeekESP/wiki). They live in the main
 repository so wiki changes are reviewable in pull requests and travel with the
 code they describe — a browser-edited wiki drifts out of date silently.
 
@@ -10,14 +10,14 @@ code they describe — a browser-edited wiki drifts out of date silently.
 GitHub creates the `.wiki.git` repository only after the first page exists, so
 this is a one-time manual step:
 
-1. Open <https://github.com/shouravx/PeekESP/wiki> and click
+1. Open <https://github.com/rhshourav/PeekESP/wiki> and click
    **Create the first page**. Any content will do — it gets overwritten.
 2. Save it.
 
 Then, from the repository root:
 
 ```bash
-git clone https://github.com/shouravx/PeekESP.wiki.git ../PeekESP.wiki
+git clone https://github.com/rhshourav/PeekESP.wiki.git ../PeekESP.wiki
 ```
 
 ```bash
