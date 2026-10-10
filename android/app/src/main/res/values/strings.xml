@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">PeekESP</string>
+    <string name="widget_description">Live CPU, RAM, storage and temperature for one of your machines.</string>
+</resources>
