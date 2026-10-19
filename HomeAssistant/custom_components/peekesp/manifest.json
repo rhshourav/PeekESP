@@ -1,13 +1,13 @@
 {
   "domain": "peekesp",
   "name": "PeekESP",
-  "version": "0.1.0",
-  "documentation": "https://github.com/rhshourav/PeekESP",
-  "issue_tracker": "https://github.com/rhshourav/PeekESP/issues",
   "codeowners": ["@rhshourav"],
   "config_flow": true,
   "dependencies": ["http", "frontend"],
-  "iot_class": "cloud_polling",
+  "documentation": "https://github.com/rhshourav/hass-peekesp",
   "integration_type": "service",
-  "requirements": []
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/rhshourav/hass-peekesp/issues",
+  "requirements": [],
+  "version": "0.1.0"
 }

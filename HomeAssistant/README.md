@@ -12,9 +12,20 @@ required.
 
 ## Install
 
-1. Copy `custom_components/peekesp` into your HA config folder (or add this
-   repo to HACS as a custom repository, type *Integration*).
-2. Restart Home Assistant.
+**With HACS** (and the Marketplace in Home Assistant 2026.11 and later):
+
+1. Open HACS, menu, **Custom repositories**, add
+   `https://github.com/rhshourav/hass-peekesp` as type **Integration**.
+   (Once it is in the default catalog you can just search for *PeekESP*.)
+2. Download **PeekESP** and restart Home Assistant.
+
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rhshourav&repository=hass-peekesp&category=integration)
+
+**Manually:** copy `custom_components/peekesp` into your config folder and
+restart.
+
+Then:
+
 3. **Settings → Devices & services → Add integration → PeekESP**.
    - *Pairing code*: the code your agent was set up with (the one the device
      showed on first boot). Dashes optional.
