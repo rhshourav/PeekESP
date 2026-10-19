@@ -1,0 +1,55 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "PeekESP",
+        "description": "How should Home Assistant find your machines?",
+        "menu_options": {
+          "pair": "Use the pairing code from the device",
+          "manual": "Enter a relay URL and token"
+        }
+      },
+      "pair": {
+        "title": "Pair with a code",
+        "description": "Enter the code the device showed on its screen, or the one your agent was set up with. Dashes are optional.",
+        "data": { "code": "Pairing code", "relay_base": "Relay address" },
+        "data_description": { "relay_base": "Leave as is unless you deployed your own Worker." }
+      },
+      "manual": {
+        "title": "Custom relay",
+        "description": "For a named or private stream.",
+        "data": { "url": "Worker URL", "token": "Read token" }
+      },
+      "reauth_confirm": {
+        "title": "The relay rejected the saved credentials",
+        "description": "Enter the current pairing code (or read token) to reconnect.",
+        "data": { "code": "Pairing code", "token": "Read token" }
+      }
+    },
+    "error": {
+      "invalid_code": "That is not a valid code. It is 10 characters: letters A-Z without I and O, and digits 2-9.",
+      "invalid_url": "The address must start with https://",
+      "invalid_auth": "The relay did not accept that code or token. If you generated a new code on the device, use the new one.",
+      "cannot_connect": "Could not reach the relay. Check the address and your internet connection."
+    },
+    "abort": {
+      "already_configured": "This stream is already set up.",
+      "reauth_successful": "Reconnected."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PeekESP options",
+        "data": {
+          "scan_interval": "Poll interval (seconds)",
+          "offline_after": "Mark a machine offline after (seconds)"
+        },
+        "data_description": {
+          "scan_interval": "The device polls the same relay every 5 s. Each poll counts against your Worker's request quota.",
+          "offline_after": "Counted from the host's last push, as reported by the relay."
+        }
+      }
+    }
+  }
+}

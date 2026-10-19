@@ -1,0 +1,13 @@
+{
+  "domain": "peekesp",
+  "name": "PeekESP",
+  "version": "0.1.0",
+  "documentation": "https://github.com/rhshourav/PeekESP",
+  "issue_tracker": "https://github.com/rhshourav/PeekESP/issues",
+  "codeowners": ["@rhshourav"],
+  "config_flow": true,
+  "dependencies": ["http", "frontend"],
+  "iot_class": "cloud_polling",
+  "integration_type": "service",
+  "requirements": []
+}
