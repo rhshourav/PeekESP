@@ -14,9 +14,14 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.format.DateFormat
+import com.rhshourav.peekesp.data.Battery
+import com.rhshourav.peekesp.data.BatteryInfo
+import com.rhshourav.peekesp.data.BatteryLevel
 import com.rhshourav.peekesp.data.ClockFmt
 import com.rhshourav.peekesp.data.Fmt
+import com.rhshourav.peekesp.data.Freshness
 import com.rhshourav.peekesp.data.Machine
+import com.rhshourav.peekesp.data.PowerState
 import com.rhshourav.peekesp.data.WidgetStyle
 import java.time.ZoneId
 import java.util.Locale
@@ -56,6 +61,9 @@ object WidgetRenderer {
 
     /** The opacity at which the inner panel has its original alpha (0xC8). */
     private const val PANEL_REF_OPACITY = 84f
+
+    /** More machines than this and the battery page shows one fewer, then "+N more". */
+    private const val MAX_BATTERY_ROWS = 5
 
     private class Geo(val ox: Float, val oy: Float, w: Float, h: Float) {
         val sx = w / 240f
@@ -116,14 +124,15 @@ object WidgetRenderer {
             color = Palette.CYAN.alpha(0x4D); strokeWidth = max(1f, g.m(1f))
         }
         c.drawLine(g.x(8f), g.y(19f), g.x(232f), g.y(19f), rule)
-        dot(c, g, f.link.color.takeIf { m != null } ?: Palette.DIM)
+        // The battery page has no single machine but does have a link, so it keeps the coloured dot.
+        dot(c, g, f.link.color.takeIf { m != null || f.kind == PageKind.POWER } ?: Palette.DIM)
 
         if (f.kind == PageKind.CLOCK) {
             clockPage(ctx, c, g, f, reg, bold)
             return bmp
         }
-        if (f.kind == PageKind.POWER && m == null) {
-            noBatteryPage(c, g, f, reg, bold)
+        if (f.kind == PageKind.POWER) {
+            batteryPage(c, g, f, reg, bold)
             return bmp
         }
         if (m == null) {
@@ -140,12 +149,6 @@ object WidgetRenderer {
 
         // Offline numbers go dim: "this is the last thing we heard", not "this is now".
         val value = if (f.offline) Palette.DIM else Palette.TEXT
-
-        if (f.kind == PageKind.POWER) {
-            powerPage(c, g, f, m, value, bold, reg)
-            footer(c, g, f, m, reg)
-            return bmp
-        }
 
         // ---- gauges ----
         gauge(c, g, g.x(6f), g.y(23f), m.cpu, Palette.CYAN, value, "CPU %", bold, reg)
@@ -203,7 +206,8 @@ object WidgetRenderer {
             )
         }
 
-        footer(c, g, f, m, reg)
+        val left = if (f.offline) "offline ${Fmt.ago(m.ageS + f.sinceFetchS)}" else Fmt.uptime(m.uptimeS)
+        footer(c, g, f, left, m.ageS.toLong(), reg)
         return bmp
     }
 
@@ -211,104 +215,137 @@ object WidgetRenderer {
     //  Pages
     // ------------------------------------------------------------------------
 
-    /** The machine's own battery: the cell drawn, the level, and what it is doing. */
-    private fun powerPage(c: Canvas, g: Geo, f: Frame, m: Machine, valueInk: Int, bold: Typeface, reg: Typeface) {
-        val pct = (m.batteryPct ?: 0).coerceIn(0, 100)
-        val frac = pct / 100f
-        val level = when {
-            f.offline -> Palette.DIM
-            m.charging -> Palette.GREEN
-            pct <= 15 -> Palette.RED
-            pct <= 30 -> Palette.AMBER
-            else -> Palette.GREEN
-        }
-
-        text(c, "BATTERY", g.x(8f), g.y(24f), ink(reg, g.m(12f), Palette.DIM))
-
-        // The cell: body, terminal nub, and a fill that is the charge.
-        val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE; strokeWidth = max(1f, g.m(2f)); color = Palette.DIM
-        }
-        c.drawRoundRect(RectF(g.x(12f), g.y(40f), g.x(122f), g.y(90f)), g.m(4f), g.m(4f), outline)
-        c.drawRoundRect(
-            RectF(g.x(122f), g.y(56f), g.x(127f), g.y(74f)), g.m(1f), g.m(1f),
-            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Palette.DIM },
-        )
-        if (frac > 0f) {
-            val l = g.x(17f)
-            val fw = max(g.m(4f), 102f * g.sx * frac)
-            c.drawRoundRect(
-                RectF(l, g.y(45f), l + fw, g.y(85f)), g.m(2f), g.m(2f),
-                Paint(Paint.ANTI_ALIAS_FLAG).apply { color = level },
-            )
-        }
-        if (m.charging) {
-            // Drawn, not a glyph: the device draws its bolt too. Centred on the cell.
-            val dx = 9f
-            val bolt = Path().apply {
-                moveTo(g.x(61.5f + dx), g.y(54f))
-                lineTo(g.x(52f + dx), g.y(67.5f))
-                lineTo(g.x(57.5f + dx), g.y(67.5f))
-                lineTo(g.x(55.5f + dx), g.y(78f))
-                lineTo(g.x(65.5f + dx), g.y(63.5f))
-                lineTo(g.x(60f + dx), g.y(63.5f))
-                close()
-            }
-            // Dark on a full cell, light on a nearly empty one: whichever contrasts with what is under it.
-            c.drawPath(bolt, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (frac >= 0.45f) Palette.BG else Palette.TEXT })
-        }
-
-        val rx = g.x(132f)
-        val room = 100f * g.sx
-        text(c, "$pct%", rx, g.y(34f), ink(bold, g.m(22f), valueInk))
-
-        val (state, stateInk) = when {
-            m.charging -> "CHARGING" to Palette.AMBER
-            m.ac -> "ON AC" to Palette.DIM
-            else -> "ON BATTERY" to Palette.DIM
-        }
-        val sp = ink(reg, g.m(12f), if (f.offline) Palette.DIM else stateInk)
-        text(c, fit(state, sp, room), rx, g.y(64f), sp)
-
-        val left = if (!m.charging && !m.ac) m.batteryMin?.let { "${Fmt.remaining(it)} left" } else null
-        if (left != null) {
-            val lp = ink(reg, g.m(12f), Palette.DIM)
-            text(c, fit(left, lp, room), rx, g.y(80f), lp)
-        }
-    }
-
-    /** Battery is on, but nothing reports one: say so, and say which machines were checked. */
-    private fun noBatteryPage(c: Canvas, g: Geo, f: Frame, reg: Typeface, bold: Typeface) {
+    /**
+     * Every connected machine's battery on one page. Machines that have one come
+     * first, then the rest, each group in the machine list's own (alphabetical)
+     * order so rows do not reshuffle when a reading lands. Rows get taller when
+     * there are few of them, and past [MAX_BATTERY_ROWS] the tail becomes "+N more".
+     */
+    private fun batteryPage(c: Canvas, g: Geo, f: Frame, reg: Typeface, bold: Typeface) {
         text(c, "// BATTERY", g.x(44f), g.y(3f), ink(reg, g.m(12f), Palette.DIM))
         if (f.count > 1) {
             textRight(c, "${f.index + 1}/${f.count}", g.x(206f), g.y(3f), ink(reg, g.m(12f), Palette.CYAN))
         }
 
-        // The same cell as the battery page, empty.
-        val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE; strokeWidth = max(1f, g.m(2f)); color = Palette.DIM
+        val ordered = f.machines.sortedBy { !Battery.of(it).present }   // stable: false sorts first
+        val shown = if (ordered.size > MAX_BATTERY_ROWS) ordered.take(MAX_BATTERY_ROWS - 1) else ordered
+        val hidden = ordered.size - shown.size
+        val slots = shown.size + if (hidden > 0) 1 else 0
+        val top = 25f
+        val rowH = if (slots == 0) 0f else min(30f, 89f / slots)
+
+        val divider = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Palette.TRACK; strokeWidth = max(1f, g.m(1f))
         }
-        c.drawRoundRect(RectF(g.x(12f), g.y(40f), g.x(122f), g.y(90f)), g.m(4f), g.m(4f), outline)
+        shown.forEachIndexed { i, m ->
+            batteryRow(c, g, m, top + i * rowH, rowH, reg, bold)
+            if (i < slots - 1) c.drawLine(g.x(8f), g.y(top + (i + 1) * rowH), g.x(232f), g.y(top + (i + 1) * rowH), divider)
+        }
+        if (hidden > 0) {
+            val mp = ink(reg, g.m(11f), Palette.DIM)
+            text(c, "+$hidden more", g.x(8f), g.y(top + shown.size * rowH + (rowH - 11f) / 2f), mp)
+        }
+
+        val reporting = ordered.count { Battery.of(it).present }
+        val left = when {
+            ordered.isEmpty() -> ""
+            reporting == 0 -> "none have a battery"
+            else -> "$reporting of ${ordered.size} have a battery"
+        }
+        footer(c, g, f, left, 0L, reg)
+    }
+
+    private fun levelInk(info: BatteryInfo, offline: Boolean): Int = when {
+        !info.present || offline -> Palette.DIM
+        info.state == PowerState.CHARGING -> Palette.GREEN
+        else -> when (Battery.level(info)) {
+            BatteryLevel.CRITICAL -> Palette.RED
+            BatteryLevel.LOW -> Palette.AMBER
+            BatteryLevel.OK -> Palette.GREEN
+        }
+    }
+
+    /** A cell, then a name and what it is doing, then the level. Two lines when the row is tall enough. */
+    private fun batteryRow(c: Canvas, g: Geo, m: Machine, top: Float, h: Float, reg: Typeface, bold: Typeface) {
+        val info = Battery.of(m)
+        // Offline is the machine's own silence when we fetched, as everywhere else.
+        val offline = m.ageS >= Freshness.offlineAfterSeconds(Freshness.DEFAULT_POLL_S)
+        val tone = levelInk(info, offline)
+        val two = h >= 24f
+
+        val cw = if (two) 38f else 30f
+        val ch = if (two) 18f else 12f
+        cell(c, g, 8f, top + (h - ch) / 2f, cw, ch, info, tone)
+
+        val pctText = if (info.present) "${info.pct}%" else "--"
+        val pctPaint = ink(bold, g.m(if (two) 16f else 12f), if (info.present && !offline) Palette.TEXT else Palette.DIM)
+        val pctW = pctPaint.measureText(pctText)
+
+        val hostPaint = ink(reg, g.m(if (two) 12f else 11f), if (offline) Palette.AMBER else Palette.TEXT)
+        val tailInk = when {
+            !info.present || offline -> Palette.DIM
+            info.state == PowerState.CHARGING -> Palette.AMBER
+            Battery.level(info) != BatteryLevel.OK -> tone
+            else -> Palette.DIM
+        }
+        val tailPaint = ink(reg, g.m(if (two) 11f else 10f), tailInk)
+
+        if (two) {
+            val textX = g.x(54f)
+            val room = g.x(232f) - pctW - g.m(8f) - textX
+            val line1 = top + (h - 25f) / 2f
+            text(c, fit(m.host, hostPaint, room), textX, g.y(line1), hostPaint)
+            text(c, fit(info.tail, tailPaint, room), textX, g.y(line1 + 14f), tailPaint)
+            textRight(c, pctText, g.x(232f), g.y(top + (h - 16f) / 2f - 1f), pctPaint)
+        } else {
+            val textTop = top + (h - 12f) / 2f
+            text(c, fit(m.host, hostPaint, 74f * g.sx), g.x(44f), g.y(textTop), hostPaint)
+            val tailX = g.x(124f)
+            text(c, fit(info.tail, tailPaint, g.x(232f) - pctW - g.m(6f) - tailX), tailX, g.y(textTop + 1f), tailPaint)
+            textRight(c, pctText, g.x(232f), g.y(textTop), pctPaint)
+        }
+    }
+
+    /** A battery drawn small: shell, terminal, fill for the charge, and a bolt while charging. */
+    private fun cell(c: Canvas, g: Geo, x: Float, y: Float, w: Float, h: Float, info: BatteryInfo, tone: Int) {
+        val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE; strokeWidth = max(1f, g.m(1.5f)); color = Palette.DIM
+        }
+        c.drawRoundRect(RectF(g.x(x), g.y(y), g.x(x + w), g.y(y + h)), g.m(3f), g.m(3f), outline)
         c.drawRoundRect(
-            RectF(g.x(122f), g.y(56f), g.x(127f), g.y(74f)), g.m(1f), g.m(1f),
+            RectF(g.x(x + w), g.y(y + h * 0.3f), g.x(x + w + 2.5f), g.y(y + h * 0.7f)), g.m(1f), g.m(1f),
             Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Palette.DIM },
         )
-        centered(c, "--", g.x(67f), g.y(65f), ink(bold, g.m(22f), Palette.DIM))
-
-        val rx = g.x(132f)
-        val room = 100f * g.sx
-        val head = ink(bold, g.m(14f), Palette.TEXT)
-        text(c, "NO BATTERY", rx, g.y(34f), head)
-        text(c, "REPORTED", rx, g.y(50f), head)
-
-        val hp = ink(reg, g.m(11f), Palette.DIM)
-        f.hosts.take(2).forEachIndexed { i, h ->
-            text(c, fit("// $h", hp, room), rx, g.y(72f + i * 13f), hp)
+        val pct = info.pct ?: return              // no battery: an empty shell and nothing to fill
+        val frac = pct / 100f
+        if (frac > 0f) {
+            val inset = 2f
+            val fw = max(g.m(3f), (w - 2 * inset) * g.sx * frac)
+            c.drawRoundRect(
+                RectF(g.x(x + inset), g.y(y + inset), g.x(x + inset) + fw, g.y(y + h - inset)),
+                g.m(1.5f), g.m(1.5f),
+                Paint(Paint.ANTI_ALIAS_FLAG).apply { color = tone },
+            )
         }
-        if (f.hosts.size > 2) text(c, "+${f.hosts.size - 2} more", rx, g.y(98f), hp)
-
-        val note = ink(reg, g.m(10f), Palette.DIM)
-        centered(c, fit("Machines without a battery are skipped.", note, 224f * g.sx), g.x(120f), g.y(122f), note)
+        if (info.state == PowerState.CHARGING) {
+            val bw = h * 0.62f
+            val bh = h * 0.86f
+            val bx = x + w / 2f - bw / 2f
+            val by = y + (h - bh) / 2f
+            fun px(u: Float) = g.x(bx + u * bw)
+            fun py(v: Float) = g.y(by + v * bh)
+            val bolt = Path().apply {
+                moveTo(px(0.704f), py(0f))
+                lineTo(px(0f), py(0.5625f))
+                lineTo(px(0.407f), py(0.5625f))
+                lineTo(px(0.259f), py(1f))
+                lineTo(px(1f), py(0.396f))
+                lineTo(px(0.593f), py(0.396f))
+                close()
+            }
+            // Dark on a mostly full cell, light on a mostly empty one: whichever contrasts with what is under it.
+            c.drawPath(bolt, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (frac >= 0.5f) Palette.BG else Palette.TEXT })
+        }
     }
 
     /**
@@ -344,12 +381,11 @@ object WidgetRenderer {
         }
     }
 
-    /** uptime (or "offline 5m") ... as of 12m ago ... LINK OK */
-    private fun footer(c: Canvas, g: Geo, f: Frame, m: Machine, reg: Typeface) {
+    /** left text ... as of 12m ago ... LINK OK. [ageS] is how old the reading was when it was fetched. */
+    private fun footer(c: Canvas, g: Geo, f: Frame, leftText: String, ageS: Long, reg: Typeface) {
         val foot = g.y(118f)
-        val leftText = if (f.offline) "offline ${Fmt.ago(m.ageS + f.sinceFetchS)}" else Fmt.uptime(m.uptimeS)
         val leftPaint = ink(reg, g.m(12f), Palette.DIM)
-        text(c, leftText, g.x(8f), foot, leftPaint)
+        text(c, fit(leftText, leftPaint, 150f * g.sx), g.x(8f), foot, leftPaint)
 
         val linkPaint = ink(reg, g.m(12f), f.link.color)
         textRight(c, f.link.label, g.x(232f), foot, linkPaint)
@@ -357,9 +393,9 @@ object WidgetRenderer {
         // The widget's own age. Centred in whatever room the two ends leave, and
         // dropped rather than overlapped if there is none.
         val asOf = ink(reg, g.m(12f), Palette.DIM)
-        val label = Fmt.asOf(f.sinceFetchS + m.ageS)
+        val label = Fmt.asOf(f.sinceFetchS + ageS)
         val gap = g.m(8f)
-        val from = g.x(8f) + leftPaint.measureText(leftText) + gap
+        val from = g.x(8f) + leftPaint.measureText(fit(leftText, leftPaint, 150f * g.sx)) + gap
         val to = g.x(232f) - linkPaint.measureText(f.link.label) - gap
         val need = asOf.measureText(label)
         if (need <= to - from) {

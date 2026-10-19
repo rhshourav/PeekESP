@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -91,9 +92,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rhshourav.peekesp.data.Battery
+import com.rhshourav.peekesp.data.BatteryLevel
 import com.rhshourav.peekesp.data.FetchResult
+import com.rhshourav.peekesp.data.Fmt
+import com.rhshourav.peekesp.data.Freshness
 import com.rhshourav.peekesp.data.Machine
 import com.rhshourav.peekesp.data.Pairing
+import com.rhshourav.peekesp.data.Parser
+import com.rhshourav.peekesp.data.PowerState
 import com.rhshourav.peekesp.data.RelayClient
 import com.rhshourav.peekesp.data.RelayConfig
 import com.rhshourav.peekesp.data.Setup
@@ -179,6 +186,15 @@ private fun Screen() {
     var confirmForget by remember { mutableStateOf(false) }
     var showRelay by rememberSaveable { mutableStateOf(false) }
     var relay by remember { mutableStateOf(RelayConfig.get(ctx)) }
+
+    // What the widget last fetched, re-read every few seconds so a refresh shows up here too.
+    var snapshot by remember { mutableStateOf(readSnapshot(ctx)) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            snapshot = readSnapshot(ctx)
+            delay(4_000)
+        }
+    }
 
     /**
      * One path for both modes. The difference is what a bad answer means:
@@ -315,7 +331,17 @@ private fun Screen() {
             }
         }
 
-        // ---- 2. Widget ----
+        // ---- 2. Machines ----
+        if (current != null) {
+            SectionCard(
+                title = "Machines",
+                subtitle = "From the last reading your phone fetched.",
+            ) {
+                MachinesPanel(snapshot)
+            }
+        }
+
+        // ---- 3. Widget ----
         SectionCard(
             title = "Widget",
             subtitle = "Changes reach your home screen automatically.",
@@ -323,7 +349,7 @@ private fun Screen() {
             WidgetPanel(store = styleStore, onApply = { scope.launch { redrawWidgets(ctx) } })
         }
 
-        // ---- 3. Relay ----
+        // ---- 4. Relay ----
         SectionCard(
             title = "Relay",
             subtitle = "The server your phone and your agents meet at.",
@@ -489,8 +515,16 @@ private val SAMPLE_MACHINE = Machine(
     rxKbps = 1331.0, txKbps = 113.0, uptimeS = 3 * 86400L + 4 * 3600,
 )
 
+/** A charging laptop, a desktop with no battery, and a nearly flat laptop: the three things the page has to tell apart. */
+private val SAMPLE_MACHINES = listOf(
+    SAMPLE_MACHINE.copy(host = "dhaka-laptop"),
+    SAMPLE_MACHINE.copy(host = "office-pc", batteryPct = 18, batteryMin = 42, charging = false, ac = false),
+    SAMPLE_MACHINE.copy(host = "kushtia-server", batteryPct = null, batteryMin = null, charging = false, ac = false),
+)
+
 private fun sampleFrame(kind: PageKind, nowMs: Long, count: Int, index: Int, look: WidgetStyle) = Frame(
-    machine = if (kind == PageKind.CLOCK) null else SAMPLE_MACHINE,
+    machine = if (kind == PageKind.MACHINE) SAMPLE_MACHINE else null,
+    machines = if (kind == PageKind.POWER) SAMPLE_MACHINES else emptyList(),
     index = index, count = count, sinceFetchS = 0, offline = false, link = Link.OK, latencyMs = 42,
     kind = kind, nowMs = nowMs, drawTime = true, showBattery = look.battery,
 )
@@ -576,7 +610,7 @@ private fun WidgetPanel(store: StyleStore, onApply: () -> Unit) {
     )
     ToggleRow(
         title = "Battery and charging",
-        subtitle = "Level and charging state. Only machines that report a battery get a page; if none do, one page says so.",
+        subtitle = "One page with every connected machine\u2019s battery and charging state, and BAT on the machine page when it has one.",
         checked = look.battery,
         onChange = { look = look.copy(battery = it); store.save(look) },
     )
@@ -667,6 +701,96 @@ private fun StyleSlider(label: String, value: Int, onChange: (Int) -> Unit) {
                 contentDescription = label
                 stateDescription = "$value percent"
             },
+        )
+    }
+}
+
+// ----------------------------------------------------------------------------
+//  Machines
+// ----------------------------------------------------------------------------
+
+/** The widget's cache, parsed, plus the clocks needed to say how old each reading is now. */
+private data class Snapshot(val machines: List<Machine>, val fetchedAtMs: Long, val nowMs: Long)
+
+private fun readSnapshot(ctx: Context): Snapshot {
+    val cached = WidgetCache(ctx).read()
+    val machines = try {
+        if (cached == null) emptyList() else Parser.parse(cached.raw)
+    } catch (e: Exception) {
+        emptyList()
+    }
+    return Snapshot(machines, cached?.fetchedAtMs ?: 0L, System.currentTimeMillis())
+}
+
+@Composable
+private fun MachinesPanel(s: Snapshot) {
+    if (s.machines.isEmpty()) {
+        Text(
+            "No readings yet. Machines appear here once a device or agent pushes to your code.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(Palette.DIM),
+        )
+        return
+    }
+    s.machines.forEachIndexed { i, m ->
+        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(Color(Palette.TRACK)))
+        MachineRow(m, s)
+    }
+    val reporting = s.machines.count { Battery.of(it).present }
+    Text(
+        if (reporting == 0) {
+            "None of these report a battery. A desktop never does; on a laptop, the agent has to send " +
+                "battery_percent for it to appear here and on the widget."
+        } else {
+            "$reporting of ${s.machines.size} report a battery."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = Color(Palette.DIM),
+    )
+}
+
+@Composable
+private fun MachineRow(m: Machine, s: Snapshot) {
+    val age = Freshness.ageSeconds(m.ageS, s.fetchedAtMs, s.nowMs)
+    val offline = age >= Freshness.offlineAfterSeconds(Freshness.DEFAULT_POLL_S)
+    val bat = Battery.of(m)
+    val tone = when {
+        offline || !bat.present -> Palette.DIM
+        bat.state == PowerState.CHARGING -> Palette.GREEN
+        else -> when (Battery.level(bat)) {
+            BatteryLevel.CRITICAL -> Palette.RED
+            BatteryLevel.LOW -> Palette.AMBER
+            BatteryLevel.OK -> Palette.GREEN
+        }
+    }
+    val status = (if (offline) "offline ${Fmt.ago(age)}" else "online") + " \u00B7 " + bat.tail
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                m.host,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                status,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(if (offline) Palette.AMBER else Palette.DIM),
+            )
+        }
+        Text(
+            if (bat.present) "${bat.pct}%" else "--",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color(tone),
         )
     }
 }

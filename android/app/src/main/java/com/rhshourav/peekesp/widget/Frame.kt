@@ -1,6 +1,7 @@
 package com.rhshourav.peekesp.widget
 
 import android.content.Context
+import com.rhshourav.peekesp.data.Battery
 import com.rhshourav.peekesp.data.ClockFmt
 import com.rhshourav.peekesp.data.Fmt
 import com.rhshourav.peekesp.data.Freshness
@@ -55,21 +56,17 @@ data class PageRef(val kind: PageKind, val machine: Int)
 
 object Pages {
     /**
-     * Each machine, then (if enabled, and only for machines that report a
-     * battery) that machine's battery, then the clock last.
+     * Every machine, then one battery page for all of them (if enabled), then the
+     * clock last.
      *
-     * If battery is on but no machine reports one, a single battery page says so
-     * (machine = -1). The device does the same: its power page reads "no battery"
-     * rather than disappearing, which would look like a bug.
+     * The battery page is one page however many machines there are, and it is
+     * there even when none of them has a battery: that page then says so, per
+     * machine, instead of vanishing and leaving you to wonder whether it is a bug.
+     * The device does the same ("host  no battery").
      */
     fun build(machines: List<Machine>, look: WidgetStyle): List<PageRef> = buildList {
-        machines.forEachIndexed { i, m ->
-            add(PageRef(PageKind.MACHINE, i))
-            if (look.battery && m.batteryPct != null) add(PageRef(PageKind.POWER, i))
-        }
-        if (look.battery && machines.isNotEmpty() && machines.none { it.batteryPct != null }) {
-            add(PageRef(PageKind.POWER, -1))
-        }
+        machines.indices.forEach { add(PageRef(PageKind.MACHINE, it)) }
+        if (look.battery && machines.isNotEmpty()) add(PageRef(PageKind.POWER, -1))
         if (look.clock) add(PageRef(PageKind.CLOCK, -1))
     }
 
@@ -108,8 +105,8 @@ data class Frame(
      */
     val drawTime: Boolean = true,
     val showBattery: Boolean = true,
-    /** Machine names, for the battery page that says no machine reports a battery. */
-    val hosts: List<String> = emptyList(),
+    /** Every machine, for the battery page. */
+    val machines: List<Machine> = emptyList(),
 ) {
     /** The widget is a bitmap, so everything on it has to be said here for TalkBack. */
     fun describe(): String {
@@ -121,16 +118,19 @@ data class Frame(
             if (count > 1) parts += "tap for the next page"
             return parts.joinToString(". ")
         }
-        if (kind == PageKind.POWER && machine == null) {
-            val parts = mutableListOf("PeekESP battery page", "No machine is reporting a battery")
-            if (hosts.isNotEmpty()) parts += "Checked ${hosts.joinToString(", ")}"
+        if (kind == PageKind.POWER) {
+            val parts = mutableListOf("PeekESP battery page")
+            machines.forEach { mm ->
+                val b = Battery.of(mm)
+                parts += if (b.present) "${mm.host}: ${b.pct} percent, ${b.tail}" else "${mm.host}: no battery"
+            }
+            parts += Fmt.asOf(sinceFetchS)
             if (count > 1) parts += "tap for the next page"
             return parts.joinToString(". ")
         }
         val m = machine ?: return "PeekESP. ${message ?: "No data."}"
         val parts = mutableListOf<String>()
         parts += if (count > 1) "${m.host}, page ${index + 1} of $count" else m.host
-        if (kind == PageKind.POWER) parts += "battery page"
         if (offline) parts += "offline, last heard ${Fmt.ago(m.ageS + sinceFetchS)} ago"
         if (kind == PageKind.MACHINE) {
             m.cpu?.let { parts += "CPU ${it.roundToInt()} percent" }
@@ -144,17 +144,8 @@ data class Frame(
             m.txKbps?.let { parts += "upload ${Fmt.rate(it)}" }
         }
         if (showBattery) {
-            m.batteryPct?.let {
-                val state = when {
-                    m.charging -> ", charging"
-                    m.ac -> ", on AC"
-                    else -> ", on battery"
-                }
-                parts += "battery $it percent$state"
-            }
-            if (kind == PageKind.POWER && !m.charging && !m.ac) {
-                m.batteryMin?.let { parts += "${Fmt.remaining(it)} left" }
-            }
+            val b = Battery.of(m)
+            if (b.present) parts += "battery ${b.pct} percent, ${b.tail}"
         }
         if (!offline) Fmt.uptime(m.uptimeS).takeIf { it.isNotEmpty() }?.let { parts += it }
         parts += "link ${link.label.lowercase()}"
@@ -199,11 +190,16 @@ object FrameBuilder {
             )
         }
 
-        if (page.kind == PageKind.POWER && page.machine < 0) {
+        if (page.kind == PageKind.POWER) {
+            val link = when {
+                cached.status == WidgetCache.Status.FAILED -> Link.NONE
+                since > Freshness.WIDGET_STALE_S -> Link.STALE
+                else -> Link.OK
+            }
             return Frame(
-                machine = null, index = index, count = pages.size, sinceFetchS = since,
+                machine = null, index = index, count = pages.size, sinceFetchS = since, link = link,
                 kind = PageKind.POWER, nowMs = nowMs, drawTime = false, showBattery = look.battery,
-                hosts = machines.map { it.host },
+                machines = machines,
             )
         }
 
