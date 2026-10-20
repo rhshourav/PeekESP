@@ -1,10 +1,10 @@
 name: Tests
 
-# The Python suites - the Home Assistant integration, the Raspberry Pi display
-# host, and the Linux agent with its peekesp wrapper - had only ever been run on
-# the laptop that wrote them. They are standard library plus Pillow and take
-# about fifteen seconds, so they run on every push rather than behind a paths
-# filter that someone would eventually forget to extend.
+# The Python suites - the Raspberry Pi display host and the Linux agent with its
+# peekesp wrapper - had only ever been run on the laptop that wrote them. They
+# are standard library plus Pillow and take about fifteen seconds, so they
+# run on every push rather than behind a paths filter that someone would
+# eventually forget to extend.
 on:
   push:
     branches: [main, dev]
