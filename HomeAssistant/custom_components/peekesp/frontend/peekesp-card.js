@@ -143,7 +143,8 @@ const skeleton = (uid) => `
 /** Owns the SVG: builds it once, then only mutates attributes. */
 class PeekScreen {
   constructor(root, { reducedMotion = false } = {}) {
-    const uid = `pk${Math.random().toString(36).slice(2, 8)}`;
+    const bytes = window.crypto.getRandomValues(new Uint8Array(3));
+    const uid = `pk${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
     root.innerHTML = skeleton(uid);
     this.el = {};
     root.querySelectorAll("[data-k]").forEach((n) => (this.el[n.dataset.k] = n));
