@@ -56,12 +56,7 @@ LAPTOP = Machine(host="dhaka-laptop", age_s=7, cpu_percent=91.2,
 
 
 class TestPairingAgreesEverywhere(unittest.TestCase):
-    """Five implementations of three lines. A drift is invisible from both ends."""
-
-    def test_matches_the_home_assistant_integration(self):
-        ha = _load("ha_pairing",
-                   REPO / "custom_components" / "peekesp" / "pairing.py")
-        self.assertEqual(pi_pairing.derive(CODE), ha.derive(CODE))
+    """Four implementations of three lines. A drift is invisible from both ends."""
 
     def test_matches_the_windows_agent(self):
         theirs = _load("peek_pair", REPO / "windows" / "peek_pair.py").derive(CODE)
