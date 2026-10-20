@@ -15,6 +15,7 @@ import android.os.PersistableBundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -45,7 +46,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -67,9 +73,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -96,6 +105,8 @@ import com.rhshourav.peekesp.data.Battery
 import com.rhshourav.peekesp.data.BatteryLevel
 import com.rhshourav.peekesp.data.FetchResult
 import com.rhshourav.peekesp.data.Fmt
+import com.rhshourav.peekesp.data.History
+import com.rhshourav.peekesp.data.HistoryRange
 import com.rhshourav.peekesp.data.Freshness
 import com.rhshourav.peekesp.data.Machine
 import com.rhshourav.peekesp.data.Pairing
@@ -128,6 +139,19 @@ private const val REPO_LABEL = "github.com/rhshourav/PeekESP"
 private const val REPO_URL = "https://github.com/rhshourav/PeekESP"
 
 class MainActivity : ComponentActivity() {
+    /** True between onStart and onStop. The live dashboard only polls while the app can be seen. */
+    private val foreground = mutableStateOf(false)
+
+    override fun onStart() {
+        super.onStart()
+        foreground.value = true
+    }
+
+    override fun onStop() {
+        foreground.value = false
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -142,7 +166,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 // Without a Surface, Text falls back to LocalContentColor's default (black):
                 // unreadable on the dark background.
-                Surface(color = MaterialTheme.colorScheme.background) { Screen() }
+                Surface(color = MaterialTheme.colorScheme.background) { Screen(foreground.value) }
             }
         }
     }
@@ -168,8 +192,10 @@ private fun Tone.color(): Color = Color(
     },
 )
 
+private enum class Tab { DASHBOARD, CONFIGURE }
+
 @Composable
-private fun Screen() {
+private fun Screen(foreground: Boolean) {
     val ctx = LocalContext.current
     val store = remember { SetupStore(ctx) }
     val cache = remember { WidgetCache(ctx) }
@@ -187,14 +213,10 @@ private fun Screen() {
     var showRelay by rememberSaveable { mutableStateOf(false) }
     var relay by remember { mutableStateOf(RelayConfig.get(ctx)) }
 
-    // What the widget last fetched, re-read every few seconds so a refresh shows up here too.
+    var tab by rememberSaveable { mutableStateOf(Tab.DASHBOARD) }
+    var selected by rememberSaveable { mutableStateOf<String?>(null) }
+    var range by rememberSaveable { mutableStateOf(HistoryRange.H1) }
     var snapshot by remember { mutableStateOf(readSnapshot(ctx)) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            snapshot = readSnapshot(ctx)
-            delay(4_000)
-        }
-    }
 
     /**
      * One path for both modes. The difference is what a bad answer means:
@@ -273,91 +295,166 @@ private fun Screen() {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(Palette.BG))
-            .safeDrawingPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        val current = setup
+    // The live loop. While the app can be seen and a code is paired, ask the relay every 5 s
+    // (the rate the devices push at), keep the widget's cache fresh, and log every reading.
+    LaunchedEffect(setup?.code, foreground, relay) {
+        val code = setup?.code ?: return@LaunchedEffect
+        if (!foreground) return@LaunchedEffect
+        val keys = Pairing.derive(code)
+        while (true) {
+            val base = RelayConfig.get(ctx)
+            val result = withContext(Dispatchers.IO) { RelayClient.fetch(base, keys) }
+            val now = System.currentTimeMillis()
+            snapshot = when (result) {
+                is FetchResult.Ok -> {
+                    cache.saveOk(result.raw, result.machines.size, result.latencyMs, now)
+                    withContext(Dispatchers.IO) { runCatching { History.record(ctx, result.machines, now) } }
+                    Snapshot(result.machines, now, now, LinkState.LIVE, result.latencyMs)
+                }
+                FetchResult.Empty -> {
+                    cache.saveOk("{}", 0, 0, now)
+                    Snapshot(emptyList(), now, now, LinkState.LIVE)
+                }
+                FetchResult.AuthRejected -> {
+                    cache.saveAuthRejected()
+                    snapshot.copy(nowMs = now, link = LinkState.REJECTED)
+                }
+                is FetchResult.Failed -> snapshot.copy(nowMs = now, link = LinkState.RECONNECTING, error = result.reason)
+            }
+            delay(5_000)
+        }
+    }
 
-        Header(paired = current != null)
-        notice?.let { NoticeBanner(it) }
+    // Leaving the app: the cache is now newer than the widget, so redraw it once.
+    LaunchedEffect(foreground) { if (!foreground) redrawWidgets(ctx) }
 
-        // ---- 1. Setup ----
-        SectionCard(
-            title = if (current == null) "Connect a machine" else "Your setup",
-            subtitle = if (current == null) "Pair this phone with a device or agent." else null,
+    val current = setup
+    // The machine being charted: the one picked, or the first if that one is gone.
+    val sel = selected?.takeIf { h -> snapshot.machines.any { it.host == h } } ?: snapshot.machines.firstOrNull()?.host
+    val chip = when {
+        current == null -> ChipState("Not paired", Palette.AMBER)
+        snapshot.link == LinkState.LIVE -> ChipState("Live", Palette.GREEN)
+        snapshot.link == LinkState.RECONNECTING -> ChipState("Reconnecting", Palette.AMBER)
+        snapshot.link == LinkState.REJECTED -> ChipState("Code rejected", Palette.RED)
+        else -> ChipState("Connecting", Palette.DIM)
+    }
+    // One scroll position per tab, so switching back finds you where you were.
+    val dashScroll = rememberScrollState()
+    val configScroll = rememberScrollState()
+
+    Scaffold(
+        containerColor = Color(Palette.BG),
+        bottomBar = { BottomTabs(tab) { tab = it } },
+    ) { inner ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(inner)
+                .verticalScroll(if (tab == Tab.DASHBOARD) dashScroll else configScroll)
+                .padding(horizontal = 20.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (current == null) {
-                Segmented(
-                    options = listOf(Mode.ENTER to "I have a code", Mode.CREATE to "Create a code"),
-                    selected = mode,
-                    enabled = !busy,
-                    onSelect = { mode = it; notice = null },
-                )
-                when (mode) {
-                    Mode.ENTER -> EnterCodeForm(
-                        input = input,
-                        busy = busy,
-                        onInput = { input = Pairing.normalise(it).take(Pairing.CODE_LEN) },
-                        onSubmit = { if (Pairing.isValid(input)) connect(input, created = false) },
+            if (tab == Tab.DASHBOARD) {
+                // ================= Dashboard =================
+                Header("PeekESP", "Live stats from your machines", chip)
+                notice?.let { NoticeBanner(it) }
+
+                if (current == null) {
+                    SectionCard(title = "Connect a machine", subtitle = "Pair this phone with a device or agent.") {
+                        Segmented(
+                            options = listOf(Mode.ENTER to "I have a code", Mode.CREATE to "Create a code"),
+                            selected = mode,
+                            enabled = !busy,
+                            onSelect = { mode = it; notice = null },
+                        )
+                        when (mode) {
+                            Mode.ENTER -> EnterCodeForm(
+                                input = input,
+                                busy = busy,
+                                onInput = { input = Pairing.normalise(it).take(Pairing.CODE_LEN) },
+                                onSubmit = { if (Pairing.isValid(input)) connect(input, created = false) },
+                            )
+                            Mode.CREATE -> CreateCodeForm(
+                                code = draft,
+                                busy = busy,
+                                onRegenerate = { draft = Pairing.generate() },
+                                onCopy = { copyCode(ctx, draft); notice = Notice("Code copied.", Tone.OK) },
+                                onShare = { shareCode(ctx, draft) },
+                                onUse = { connect(draft, created = true) },
+                            )
+                        }
+                    }
+                    Text(
+                        "Running your own relay? Set its address under Configure before you pair.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(Palette.DIM),
                     )
-                    Mode.CREATE -> CreateCodeForm(
-                        code = draft,
-                        busy = busy,
-                        onRegenerate = { draft = Pairing.generate() },
-                        onCopy = { copyCode(ctx, draft); notice = Notice("Code copied.", Tone.OK) },
-                        onShare = { shareCode(ctx, draft) },
-                        onUse = { connect(draft, created = true) },
+                } else {
+                    DashboardPanel(
+                        snap = snapshot,
+                        selected = sel,
+                        onSelect = { selected = it },
+                        range = range,
+                        onRange = { range = it },
                     )
                 }
             } else {
-                PairedPanel(
-                    code = current.code,
-                    revealed = revealed,
-                    onToggleReveal = { revealed = !revealed },
-                    onCopy = { copyCode(ctx, current.code); notice = Notice("Code copied.", Tone.OK) },
-                    onShare = { shareCode(ctx, current.code) },
-                    onRefresh = {
-                        RefreshWorker.refreshNow(ctx)
-                        notice = Notice("Refreshing the widget\u2026")
-                    },
-                    onForget = { confirmForget = true },
-                )
+                // ================= Configure =================
+                Header("Configure", "Widget, history and connection", null)
+                notice?.let { NoticeBanner(it) }
+
+                SectionCard(
+                    title = "Widget",
+                    subtitle = "Changes reach your home screen automatically.",
+                ) {
+                    WidgetPanel(store = styleStore, onApply = { scope.launch { redrawWidgets(ctx) } })
+                }
+
+                SectionCard(
+                    title = "History",
+                    subtitle = "What the dashboard charts are built from.",
+                ) {
+                    HistoryPanel(notify = { notice = Notice(it, Tone.OK) })
+                }
+
+                SectionCard(
+                    title = if (current == null) "Setup" else "Your setup",
+                    subtitle = if (current == null) "Not paired yet." else null,
+                ) {
+                    if (current == null) {
+                        Text(
+                            "Pair this phone on the Dashboard to see your machines and fill the widget.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        OutlinedButton(onClick = { tab = Tab.DASHBOARD }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Go to Dashboard")
+                        }
+                    } else {
+                        PairedPanel(
+                            code = current.code,
+                            revealed = revealed,
+                            onToggleReveal = { revealed = !revealed },
+                            onCopy = { copyCode(ctx, current.code); notice = Notice("Code copied.", Tone.OK) },
+                            onShare = { shareCode(ctx, current.code) },
+                            onRefresh = {
+                                RefreshWorker.refreshNow(ctx)
+                                notice = Notice("Refreshing the widget\u2026")
+                            },
+                            onForget = { confirmForget = true },
+                        )
+                    }
+                }
+
+                SectionCard(
+                    title = "Relay",
+                    subtitle = "The server your phone and your agents meet at.",
+                ) {
+                    RelayPanel(relay = relay, custom = relay != RelayConfig.DEFAULT_BASE, onEdit = { showRelay = true })
+                }
+
+                AboutFooter(ctx)
             }
         }
-
-        // ---- 2. Machines ----
-        if (current != null) {
-            SectionCard(
-                title = "Machines",
-                subtitle = "From the last reading your phone fetched.",
-            ) {
-                MachinesPanel(snapshot)
-            }
-        }
-
-        // ---- 3. Widget ----
-        SectionCard(
-            title = "Widget",
-            subtitle = "Changes reach your home screen automatically.",
-        ) {
-            WidgetPanel(store = styleStore, onApply = { scope.launch { redrawWidgets(ctx) } })
-        }
-
-        // ---- 4. Relay ----
-        SectionCard(
-            title = "Relay",
-            subtitle = "The server your phone and your agents meet at.",
-        ) {
-            RelayPanel(relay = relay, custom = relay != RelayConfig.DEFAULT_BASE, onEdit = { showRelay = true })
-        }
-
-        AboutFooter(ctx)
     }
 
     if (confirmForget) {
@@ -404,8 +501,10 @@ private fun Screen() {
 //  Layout building blocks
 // ----------------------------------------------------------------------------
 
+private data class ChipState(val label: String, val color: Int)
+
 @Composable
-private fun Header(paired: Boolean) {
+private fun Header(title: String, subtitle: String, chip: ChipState?) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -413,24 +512,24 @@ private fun Header(paired: Boolean) {
     ) {
         Column {
             Text(
-                "PeekESP",
+                title,
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = Color(Palette.CYAN),
             )
             Text(
-                "Live stats from your machines",
+                subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color(Palette.DIM),
             )
         }
-        StatusChip(paired)
+        if (chip != null) StatusChip(chip)
     }
 }
 
 @Composable
-private fun StatusChip(paired: Boolean) {
-    val tone = Color(if (paired) Palette.GREEN else Palette.AMBER)
+private fun StatusChip(chip: ChipState) {
+    val tone = Color(chip.color)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -439,11 +538,51 @@ private fun StatusChip(paired: Boolean) {
     ) {
         Box(Modifier.size(8.dp).background(tone, CircleShape))
         Spacer(Modifier.width(8.dp))
-        Text(
-            if (paired) "Paired" else "Not paired",
-            style = MaterialTheme.typography.labelLarge,
-            color = tone,
+        Text(chip.label, style = MaterialTheme.typography.labelLarge, color = tone)
+    }
+}
+
+@Composable
+private fun BottomTabs(tab: Tab, onSelect: (Tab) -> Unit) {
+    val cyan = Color(Palette.CYAN)
+    val colors = NavigationBarItemDefaults.colors(
+        selectedIconColor = cyan, selectedTextColor = cyan,
+        indicatorColor = cyan.copy(alpha = 0.16f),
+        unselectedIconColor = Color(Palette.DIM), unselectedTextColor = Color(Palette.DIM),
+    )
+    NavigationBar(containerColor = Color(Palette.PANEL)) {
+        NavigationBarItem(
+            selected = tab == Tab.DASHBOARD, onClick = { onSelect(Tab.DASHBOARD) },
+            icon = { TabIcon(dashboard = true) }, label = { Text("Dashboard") }, colors = colors,
         )
+        NavigationBarItem(
+            selected = tab == Tab.CONFIGURE, onClick = { onSelect(Tab.CONFIGURE) },
+            icon = { TabIcon(dashboard = false) }, label = { Text("Configure") }, colors = colors,
+        )
+    }
+}
+
+/** Drawn, not imported: no icon library for two glyphs. Takes the colour the bar gives its icons. */
+@Composable
+private fun TabIcon(dashboard: Boolean) {
+    val c = LocalContentColor.current
+    Canvas(Modifier.size(24.dp)) {
+        val s = size.width
+        if (dashboard) {
+            val gap = s * 0.12f
+            val cell = (s - gap) / 2f
+            for (i in 0..1) for (j in 0..1) {
+                drawRoundRect(c, Offset(i * (cell + gap), j * (cell + gap)), Size(cell, cell), CornerRadius(s * 0.1f))
+            }
+        } else {
+            val ys = floatArrayOf(0.2f, 0.5f, 0.8f)
+            val knobs = floatArrayOf(0.66f, 0.30f, 0.70f)
+            for (i in 0..2) {
+                val y = ys[i] * s
+                drawLine(c, Offset(s * 0.08f, y), Offset(s * 0.92f, y), strokeWidth = s * 0.09f, cap = StrokeCap.Round)
+                drawCircle(c, s * 0.13f, Offset(knobs[i] * s, y))
+            }
+        }
     }
 }
 
@@ -468,7 +607,7 @@ private fun NoticeBanner(n: Notice) {
 
 /** Every section looks the same: a card, a title, an optional one-line explanation, then content. */
 @Composable
-private fun SectionCard(
+internal fun SectionCard(
     title: String,
     subtitle: String? = null,
     content: @Composable ColumnScope.() -> Unit,
@@ -648,7 +787,7 @@ private fun WidgetPanel(store: StyleStore, onApply: () -> Unit) {
 }
 
 @Composable
-private fun SubHeading(text: String) {
+internal fun SubHeading(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.labelLarge,
@@ -659,7 +798,7 @@ private fun SubHeading(text: String) {
 
 /** The whole row toggles, not just the switch: a bigger target, and one stop for TalkBack. */
 @Composable
-private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -701,96 +840,6 @@ private fun StyleSlider(label: String, value: Int, onChange: (Int) -> Unit) {
                 contentDescription = label
                 stateDescription = "$value percent"
             },
-        )
-    }
-}
-
-// ----------------------------------------------------------------------------
-//  Machines
-// ----------------------------------------------------------------------------
-
-/** The widget's cache, parsed, plus the clocks needed to say how old each reading is now. */
-private data class Snapshot(val machines: List<Machine>, val fetchedAtMs: Long, val nowMs: Long)
-
-private fun readSnapshot(ctx: Context): Snapshot {
-    val cached = WidgetCache(ctx).read()
-    val machines = try {
-        if (cached == null) emptyList() else Parser.parse(cached.raw)
-    } catch (e: Exception) {
-        emptyList()
-    }
-    return Snapshot(machines, cached?.fetchedAtMs ?: 0L, System.currentTimeMillis())
-}
-
-@Composable
-private fun MachinesPanel(s: Snapshot) {
-    if (s.machines.isEmpty()) {
-        Text(
-            "No readings yet. Machines appear here once a device or agent pushes to your code.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Color(Palette.DIM),
-        )
-        return
-    }
-    s.machines.forEachIndexed { i, m ->
-        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(Color(Palette.TRACK)))
-        MachineRow(m, s)
-    }
-    val reporting = s.machines.count { Battery.of(it).present }
-    Text(
-        if (reporting == 0) {
-            "None of these report a battery. A desktop never does; on a laptop, the agent has to send " +
-                "battery_percent for it to appear here and on the widget."
-        } else {
-            "$reporting of ${s.machines.size} report a battery."
-        },
-        style = MaterialTheme.typography.bodySmall,
-        color = Color(Palette.DIM),
-    )
-}
-
-@Composable
-private fun MachineRow(m: Machine, s: Snapshot) {
-    val age = Freshness.ageSeconds(m.ageS, s.fetchedAtMs, s.nowMs)
-    val offline = age >= Freshness.offlineAfterSeconds(Freshness.DEFAULT_POLL_S)
-    val bat = Battery.of(m)
-    val tone = when {
-        offline || !bat.present -> Palette.DIM
-        bat.state == PowerState.CHARGING -> Palette.GREEN
-        else -> when (Battery.level(bat)) {
-            BatteryLevel.CRITICAL -> Palette.RED
-            BatteryLevel.LOW -> Palette.AMBER
-            BatteryLevel.OK -> Palette.GREEN
-        }
-    }
-    val status = (if (offline) "offline ${Fmt.ago(age)}" else "online") + " \u00B7 " + bat.tail
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .semantics(mergeDescendants = true) {},
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                m.host,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                status,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(if (offline) Palette.AMBER else Palette.DIM),
-            )
-        }
-        Text(
-            if (bat.present) "${bat.pct}%" else "--",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = Color(tone),
         )
     }
 }
@@ -923,7 +972,7 @@ private fun openLink(ctx: Context, url: String) {
 
 /** A row of exclusive choices: pairing mode, and which widget page to preview. */
 @Composable
-private fun <T> Segmented(
+internal fun <T> Segmented(
     options: List<Pair<T, String>>,
     selected: T,
     enabled: Boolean = true,

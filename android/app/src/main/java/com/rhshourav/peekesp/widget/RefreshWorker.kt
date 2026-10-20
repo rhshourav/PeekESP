@@ -11,6 +11,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.rhshourav.peekesp.data.FetchResult
+import com.rhshourav.peekesp.data.History
 import com.rhshourav.peekesp.data.Pairing
 import com.rhshourav.peekesp.data.RelayClient
 import com.rhshourav.peekesp.data.SetupStore
@@ -34,7 +35,13 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
 
         val cache = WidgetCache(app)
         when (val r = withContext(Dispatchers.IO) { RelayClient.fetch(RelayConfig.get(app), keys) }) {
-            is FetchResult.Ok -> cache.saveOk(r.raw, r.machines.size, r.latencyMs, System.currentTimeMillis())
+            is FetchResult.Ok -> {
+                val now = System.currentTimeMillis()
+                cache.saveOk(r.raw, r.machines.size, r.latencyMs, now)
+                // The background half of the history: one reading per machine every 15 minutes.
+                // A full disk or a locked database must never stop the widget from redrawing.
+                runCatching { History.record(app, r.machines, now) }
+            }
             FetchResult.Empty -> cache.saveOk("{}", 0, 0, System.currentTimeMillis())
             FetchResult.AuthRejected -> cache.saveAuthRejected()
             is FetchResult.Failed -> cache.saveFailed()
