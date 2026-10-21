@@ -95,7 +95,7 @@ class PeekWidget : GlanceAppWidget() {
             if (frame.kind == PageKind.CLOCK) {
                 // Not clickable itself, so a tap on the digits falls through to the image under it.
                 AndroidRemoteViews(
-                    remoteViews = ClockOverlay.build(ctx, shownW, shownH),
+                    remoteViews = ClockOverlay.build(ctx, shownW, shownH, look),
                     modifier = GlanceModifier.fillMaxSize(),
                 )
             }

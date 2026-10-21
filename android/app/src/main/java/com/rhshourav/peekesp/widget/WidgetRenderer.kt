@@ -106,7 +106,14 @@ object WidgetRenderer {
         )
     }
 
-    fun render(ctx: Context, w: Int, h: Int, f: Frame, look: WidgetStyle = WidgetStyle()): Bitmap {
+    /**
+     * Draws one frame in the mode the widget is set to (dark, light, or whatever the phone is
+     * using). The mode is forced for this thread only, so the app's own theme is untouched.
+     */
+    fun render(ctx: Context, w: Int, h: Int, f: Frame, look: WidgetStyle = WidgetStyle()): Bitmap =
+        Palette.forMode(look.theme.isDark(ctx)) { draw(ctx, w, h, f, look) }
+
+    private fun draw(ctx: Context, w: Int, h: Int, f: Frame, look: WidgetStyle): Bitmap {
         val bmp = Bitmap.createBitmap(max(1, w), max(1, h), Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val wf = bmp.width.toFloat()
@@ -467,6 +474,17 @@ object WidgetRenderer {
                 )
             },
         )
+        if (!Palette.isDark) {
+            // White highlights do not show on a white card, so give it a thin edge instead.
+            c.drawRoundRect(
+                r, rad, rad,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = max(1f, h * 0.008f)
+                    color = Palette.TRACK.alpha(0xC0)
+                },
+            )
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -506,7 +524,12 @@ object WidgetRenderer {
     private fun message(c: Canvas, g: Geo, f: Frame, reg: Typeface) {
         val msg = f.message ?: return
         val tp = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = reg; textSize = g.m(14f); color = f.messageColor
+            typeface = reg; textSize = g.m(14f)
+            color = when (f.messageTone) {
+                MessageTone.DIM -> Palette.DIM
+                MessageTone.AMBER -> Palette.AMBER
+                MessageTone.RED -> Palette.RED
+            }
         }
         val width = (g.x(232f) - g.x(8f)).toInt().coerceAtLeast(1)
         val layout = StaticLayout.Builder.obtain(msg, 0, msg.length, tp, width)

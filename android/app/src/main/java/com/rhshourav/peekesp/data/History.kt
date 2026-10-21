@@ -6,6 +6,7 @@ import android.database.Cursor
 import android.database.DatabaseUtils
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import kotlin.math.abs
 
 /** One chart point: the average of every reading that fell in a time bucket. Null means no sensor. */
 data class Bucket(
@@ -31,6 +32,8 @@ data class ChartData(
     val bucketMs: Long,
     val buckets: List<Bucket>,
     val stats: Stats,
+    /** What was happening across the window: online, machine offline, phone offline, relay unreachable. */
+    val spans: List<Span>,
 )
 
 /** The two choices the user has: keep a history at all, and for how long. */
@@ -44,7 +47,7 @@ object HistoryConfig {
     fun setRetentionDays(ctx: Context, days: Int) = p(ctx).edit().putInt("days", days.coerceIn(1, 30)).apply()
 }
 
-private class HistoryDb(context: Context) : SQLiteOpenHelper(context.applicationContext, "history.db", null, 1) {
+private class HistoryDb(context: Context) : SQLiteOpenHelper(context.applicationContext, "history.db", null, 2) {
     override fun onConfigure(db: SQLiteDatabase) {
         // Readers (the dashboard) never block the writer (the widget's worker), or the other way round.
         db.enableWriteAheadLogging()
@@ -58,12 +61,22 @@ private class HistoryDb(context: Context) : SQLiteOpenHelper(context.application
                 "bat INTEGER, charging INTEGER NOT NULL DEFAULT 0, ac INTEGER NOT NULL DEFAULT 0)",
         )
         db.execSQL("CREATE INDEX samples_machine_t ON samples (machine, t)")
+        createV2(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Only one version exists. A history is a convenience, not a record worth migrating.
-        db.execSQL("DROP TABLE IF EXISTS samples")
-        onCreate(db)
+        // Readings are kept; only the new tables are added.
+        if (oldVersion < 2) createV2(db)
+    }
+
+    private fun createV2(db: SQLiteDatabase) {
+        // The phone's own view of its path to the relay, at the moments it looked.
+        db.execSQL("CREATE TABLE link (t INTEGER NOT NULL, state INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX link_t ON link (t)")
+        // Stretches when the relay said a machine had been silent: it last pushed at `push`
+        // and was still silent when we looked at `seen`.
+        db.execSQL("CREATE TABLE offline (machine TEXT NOT NULL, push INTEGER NOT NULL, seen INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX offline_machine_seen ON offline (machine, seen)")
     }
 }
 
@@ -82,8 +95,13 @@ object History {
     private const val DB_NAME = "history.db"
     private const val PRUNE_EVERY_MS = 10 * 60_000L
 
+    /** While nothing changes, say again every minute: the log needs to show "still fine", not just changes. */
+    private const val LINK_HEARTBEAT_MS = 60_000L
+
     @Volatile private var helper: HistoryDb? = null
     private val lastT = HashMap<String, Long>()
+    private val openOffline = HashMap<String, Pair<Long, Long>>()   // machine -> (rowid, push)
+    private var lastLink: LinkEvent? = null
     private var lastPrune = 0L
 
     private fun db(ctx: Context): HistoryDb =
@@ -108,6 +126,9 @@ object History {
         try {
             for (m in machines) {
                 val t = fetchedAtMs - m.ageS * 1000L
+                // The relay answered, and says this machine has been quiet for a while. Only now
+                // can that be called the machine's doing, so this is where it is written down.
+                if (m.ageS * 1000L >= Availability.OFFLINE_AFTER_MS) markOffline(d, m.host, t, fetchedAtMs)
                 val last = lastT[m.host] ?: maxT(d, m.host)
                 if (last != null) lastT[m.host] = last
                 if (!shouldLog(last, t, MIN_GAP_MS)) continue
@@ -135,6 +156,52 @@ object History {
         }
     }
 
+    /** One row per silence, extended each time we look and it is still going on. */
+    private fun markOffline(d: SQLiteDatabase, host: String, push: Long, seen: Long) {
+        val open = openOffline[host]
+        val row = if (open != null && abs(open.second - push) <= 2_000L) open.first else findOffline(d, host, push)
+        if (row != null) {
+            d.execSQL("UPDATE offline SET seen = ? WHERE rowid = ?", arrayOf<Any>(seen, row))
+            openOffline[host] = row to push
+        } else {
+            val v = ContentValues()
+            v.put("machine", host)
+            v.put("push", push)
+            v.put("seen", seen)
+            openOffline[host] = d.insert("offline", null, v) to push
+        }
+    }
+
+    /** After a restart the in-memory note is gone; the same silence is still in the table. */
+    private fun findOffline(d: SQLiteDatabase, host: String, push: Long): Long? =
+        d.rawQuery(
+            "SELECT rowid FROM offline WHERE machine = ? AND push BETWEEN ${push - 2_000} AND ${push + 2_000} LIMIT 1",
+            arrayOf(host),
+        ).use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+
+    /**
+     * Notes how the phone's path to the relay is doing. A change is always written; "same as
+     * before" is written once a minute so a long outage (or a long fine spell) leaves a trail.
+     * Not tied to any machine: it describes the phone.
+     */
+    @Synchronized
+    fun recordLink(ctx: Context, kind: LinkKind, nowMs: Long) {
+        if (!HistoryConfig.enabled(ctx)) return
+        val d = db(ctx).writableDatabase
+        val last = lastLink ?: d.rawQuery("SELECT t, state FROM link ORDER BY t DESC LIMIT 1", null).use { c ->
+            if (c.moveToFirst()) LinkEvent(c.getLong(0), LinkKind.of(c.getInt(1))) else null
+        }
+        if (last != null && last.kind == kind && nowMs - last.t < LINK_HEARTBEAT_MS) {
+            lastLink = last
+            return
+        }
+        val v = ContentValues()
+        v.put("t", nowMs)
+        v.put("state", kind.code)
+        d.insert("link", null, v)
+        lastLink = LinkEvent(nowMs, kind)
+    }
+
     private fun ContentValues.putD(key: String, v: Double?) {
         if (v == null) putNull(key) else put(key, v)
     }
@@ -151,13 +218,19 @@ object History {
     private fun pruneLocked(ctx: Context, d: SQLiteDatabase) {
         val cutoff = System.currentTimeMillis() - HistoryConfig.retentionDays(ctx) * 86_400_000L
         d.delete("samples", "t < ?", arrayOf(cutoff.toString()))
+        d.delete("link", "t < ?", arrayOf(cutoff.toString()))
+        d.delete("offline", "seen < ?", arrayOf(cutoff.toString()))
     }
 
     @Synchronized
     fun clear(ctx: Context) {
         val d = db(ctx).writableDatabase
         d.delete("samples", null, null)
+        d.delete("link", null, null)
+        d.delete("offline", null, null)
         lastT.clear()
+        openOffline.clear()
+        lastLink = null
         d.execSQL("VACUUM")
     }
 
@@ -207,7 +280,28 @@ object History {
                 )
             }
         }
-        return ChartData(range, from, now, bucket, buckets, stats)
+
+        // Phone-side outages: read from a little before the window, since one holds into it.
+        val link = ArrayList<LinkEvent>()
+        d.rawQuery(
+            "SELECT t, state FROM link WHERE t >= ${from - Availability.LINK_HOLD_MS} ORDER BY t", null,
+        ).use { c -> while (c.moveToNext()) link += LinkEvent(c.getLong(0), LinkKind.of(c.getInt(1))) }
+
+        // Machine silences: a machine counts as offline once it has been quiet a minute.
+        val silent = ArrayList<Pair<Long, Long>>()
+        d.rawQuery("SELECT push, seen FROM offline WHERE machine = ? AND seen >= $from", arrayOf(machine)).use { c ->
+            while (c.moveToNext()) {
+                val start = c.getLong(0) + Availability.OFFLINE_AFTER_MS
+                if (c.getLong(1) > start) silent += start to c.getLong(1)
+            }
+        }
+
+        val spans = Availability.build(
+            from = from, to = now, times = buckets.map { it.t },
+            joinGapMs = ChartMath.gapMs(bucket), tailMs = bucket,
+            link = link, machineOffline = silent,
+        )
+        return ChartData(range, from, now, bucket, buckets, stats, spans)
     }
 
     private fun Cursor.dbl(i: Int): Double? = if (isNull(i)) null else getDouble(i)

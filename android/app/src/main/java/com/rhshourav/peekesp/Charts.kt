@@ -19,7 +19,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -35,14 +37,43 @@ internal data class ChartSeries(
     val points: List<Pair<Long, Double?>>,
 )
 
+/** Why a stretch of a chart is shaded. Each has its own look, so colour is never the only clue. */
+internal enum class BandKind {
+    /** The machine was charging: a soft green wash. */
+    CHARGING,
+
+    /** The relay heard nothing from the machine: a solid red wash. */
+    MACHINE_OFFLINE,
+
+    /** The phone was online but the relay did not answer: amber hatching. */
+    RELAY_DOWN,
+
+    /** The phone had no internet, so nothing was fetched and the machine is unknown: grey hatching. */
+    PHONE_OFFLINE,
+}
+
+internal data class Band(val kind: BandKind, val start: Long, val end: Long)
+
+/** Diagonal lines inside a rectangle: the "we could not see" texture. */
+internal fun DrawScope.hatch(left: Float, right: Float, height: Float, color: Color, spacing: Float, stroke: Float) {
+    clipRect(left, 0f, right, height) {
+        var x = left - height
+        while (x < right) {
+            drawLine(color, Offset(x, height), Offset(x + height, 0f), strokeWidth = stroke)
+            x += spacing
+        }
+    }
+}
+
 /**
  * A line chart drawn straight onto a Canvas: no chart library, so nothing to
  * keep up to date and nothing that can disagree with the app's palette.
  *
  *  - The x axis is the whole window [fromMs, toMs], so a history that only
  *    started ten minutes ago looks like it did, instead of stretching to fill.
- *  - Lines break where the machine was silent ([gapMs]) rather than joining
- *    the last reading before an outage to the first one after it.
+ *  - Lines break where the machine was silent ([gapMs]), and wherever a [Band] says the phone or
+ *    the machine was out, rather than joining the last reading before an outage to the first after.
+ *  - Outages are shaded by cause, so "my phone had no signal" never looks like "the machine died".
  *  - Touch and drag reads the chart: [onCursor] is told the time under the
  *    finger, and null when it lifts. The vertical scroll behind it still works.
  */
@@ -54,7 +85,7 @@ internal fun LineChart(
     yMin: Double,
     yMax: Double,
     gapMs: Long,
-    bands: List<Pair<Long, Long>>,
+    bands: List<Band>,
     cursorT: Long?,
     onCursor: (Long?) -> Unit,
     topLabel: String,
@@ -64,7 +95,12 @@ internal fun LineChart(
 ) {
     val grid = Color(Palette.TRACK)
     val dim = Color(Palette.DIM)
-    val bandColor = Color(Palette.GREEN).copy(alpha = 0.14f)
+    val charging = Color(Palette.GREEN).copy(alpha = 0.14f)
+    val machineOff = Color(Palette.RED).copy(alpha = 0.12f)
+    val relayDown = Color(Palette.AMBER)
+    val phoneOff = Color(Palette.DIM)
+    // Outages cut the lines, so a gap in a line always has a shaded reason beside it.
+    val cuts = bands.filter { it.kind != BandKind.CHARGING }.map { it.start to it.end }
     val span = (toMs - fromMs).coerceAtLeast(1L)
     val ySpan = (yMax - yMin).let { if (it <= 0.0) 1.0 else it }
 
@@ -99,16 +135,32 @@ internal fun LineChart(
                 drawLine(grid, Offset(0f, gy), Offset(w, gy), strokeWidth = 1.dp.toPx())
             }
 
-            // Shaded spans, e.g. while charging.
-            bands.forEach { (a, b) ->
-                val l = x(a.coerceIn(fromMs, toMs))
-                val r = x(b.coerceIn(fromMs, toMs))
-                if (r > l) drawRect(bandColor, Offset(l, 0f), Size(r - l, h))
+            // Shaded spans: what each one is decides how it is drawn.
+            val spacing = 7.dp.toPx()
+            bands.forEach { band ->
+                val l = x(band.start.coerceIn(fromMs, toMs))
+                val r = x(band.end.coerceIn(fromMs, toMs))
+                if (r <= l) return@forEach
+                when (band.kind) {
+                    BandKind.CHARGING -> drawRect(charging, Offset(l, 0f), Size(r - l, h))
+                    BandKind.MACHINE_OFFLINE -> {
+                        drawRect(machineOff, Offset(l, 0f), Size(r - l, h))
+                        drawLine(Color(Palette.RED), Offset(l, 0f), Offset(r, 0f), strokeWidth = 2.dp.toPx())
+                    }
+                    BandKind.RELAY_DOWN -> {
+                        drawRect(relayDown.copy(alpha = 0.08f), Offset(l, 0f), Size(r - l, h))
+                        hatch(l, r, h, relayDown.copy(alpha = 0.55f), spacing, 1.dp.toPx())
+                    }
+                    BandKind.PHONE_OFFLINE -> {
+                        drawRect(phoneOff.copy(alpha = 0.10f), Offset(l, 0f), Size(r - l, h))
+                        hatch(l, r, h, phoneOff.copy(alpha = 0.55f), spacing, 1.dp.toPx())
+                    }
+                }
             }
 
             val fill = series.size == 1
             series.forEach { s ->
-                ChartMath.segments(s.points, gapMs).forEach { seg ->
+                ChartMath.segments(s.points, gapMs, cuts).forEach { seg ->
                     if (seg.size == 1) {
                         // A lone reading between two silences: a dot, since a line needs two ends.
                         drawCircle(s.color, 2.5.dp.toPx(), Offset(x(seg[0].first), y(seg[0].second)))

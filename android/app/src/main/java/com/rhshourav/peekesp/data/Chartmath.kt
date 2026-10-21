@@ -5,6 +5,7 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
 
 /** The windows the dashboard can show. Longer ones need a longer retention. */
@@ -41,10 +42,14 @@ object ChartMath {
 
     /**
      * Splits a series into runs that should be drawn as one line. A null (no sensor,
-     * or no reading) and a long silence both end a run, so a chart never joins
-     * the last reading before an outage to the first one after it.
+     * or no reading), a long silence, and a known outage ([cuts]) all end a run, so a
+     * chart never joins the last reading before an outage to the first one after it.
      */
-    fun segments(points: List<Pair<Long, Double?>>, gapMs: Long): List<List<Pair<Long, Double>>> {
+    fun segments(
+        points: List<Pair<Long, Double?>>,
+        gapMs: Long,
+        cuts: List<Pair<Long, Long>> = emptyList(),
+    ): List<List<Pair<Long, Double>>> {
         val out = mutableListOf<List<Pair<Long, Double>>>()
         var run = mutableListOf<Pair<Long, Double>>()
         var lastT: Long? = null
@@ -56,7 +61,10 @@ object ChartMath {
                 continue
             }
             val prev = lastT
-            if (prev != null && t - prev > gapMs && run.isNotEmpty()) {
+            // A known outage between two readings (the phone had no internet, the machine was off)
+            // cuts the line even when the readings are close together.
+            val cut = prev != null && cuts.any { (a, b) -> a < t && b > prev }
+            if (prev != null && (t - prev > gapMs || cut) && run.isNotEmpty()) {
                 out += run
                 run = mutableListOf()
             }
@@ -123,5 +131,121 @@ object ChartMath {
         }
         start?.let { out += (it - halfMs) to (last + halfMs) }
         return out
+    }
+}
+
+/**
+ * What the phone knew about its own path to the relay at a moment. This is separate from
+ * whether any machine is on: a machine can be perfectly well while the phone has no signal.
+ */
+enum class LinkKind(val code: Int) {
+    OK(0),
+    PHONE_OFFLINE(1),
+    RELAY_DOWN(2);
+
+    companion object {
+        fun of(code: Int): LinkKind = values().firstOrNull { it.code == code } ?: OK
+    }
+}
+
+data class LinkEvent(val t: Long, val kind: LinkKind)
+
+/**
+ * The reasons a stretch of a chart can be empty or unreliable, strongest last: when two
+ * apply, the later one wins. The order is the priority.
+ */
+enum class Coverage { ONLINE, MACHINE_OFFLINE, RELAY_DOWN, PHONE_OFFLINE }
+
+data class Span(val kind: Coverage, val start: Long, val end: Long)
+
+data class Shares(
+    val online: Double,
+    val machineOffline: Double,
+    val relayDown: Double,
+    val phoneOffline: Double,
+    val noData: Double,
+)
+
+/**
+ * Turns three kinds of evidence into one timeline of what was happening:
+ *
+ *  - readings we have        -> the machine was ONLINE between them
+ *  - the relay said a machine had been silent for a minute or more -> MACHINE_OFFLINE
+ *    (only learnt when we could reach the relay, so it is trustworthy)
+ *  - the phone could not reach the relay -> PHONE_OFFLINE or RELAY_DOWN. Here the machine
+ *    is simply unknown, so this beats everything else.
+ *
+ * Whatever none of them covers is "no data": the app was not running and nothing was asked.
+ */
+object Availability {
+    /** A machine silent this long counts as offline: the same rule the widget and device use. */
+    const val OFFLINE_AFTER_MS = 60_000L
+
+    /** A phone-side outage is only assumed to last this long past the last time it was observed. */
+    const val LINK_HOLD_MS = 20 * 60_000L
+
+    private data class Iv(val start: Long, val end: Long, val kind: Coverage)
+
+    fun build(
+        from: Long,
+        to: Long,
+        times: List<Long>,
+        joinGapMs: Long,
+        tailMs: Long,
+        link: List<LinkEvent>,
+        machineOffline: List<Pair<Long, Long>>,
+    ): List<Span> {
+        val ivs = ArrayList<Iv>()
+
+        // Readings close enough together are one run of "online". The last one holds a little
+        // past itself, since "now" is always a moment after the newest reading.
+        for (i in 0 until times.size - 1) {
+            if (times[i + 1] - times[i] <= joinGapMs) ivs += Iv(times[i], times[i + 1], Coverage.ONLINE)
+        }
+        times.lastOrNull()?.let { ivs += Iv(it, min(to, it + tailMs), Coverage.ONLINE) }
+
+        machineOffline.forEach { (a, b) -> ivs += Iv(a, b, Coverage.MACHINE_OFFLINE) }
+
+        // A failure holds until the next time the phone looked, but no longer than LINK_HOLD_MS.
+        val events = link.sortedBy { it.t }
+        events.forEachIndexed { i, e ->
+            if (e.kind == LinkKind.OK) return@forEachIndexed
+            val next = events.getOrNull(i + 1)?.t
+            val end = if (next != null) min(next, e.t + LINK_HOLD_MS) else min(to, e.t + LINK_HOLD_MS)
+            ivs += Iv(e.t, end, if (e.kind == LinkKind.PHONE_OFFLINE) Coverage.PHONE_OFFLINE else Coverage.RELAY_DOWN)
+        }
+
+        return paint(from, to, ivs)
+    }
+
+    /** Sweeps the intervals left to right, and in each stretch keeps the strongest kind covering it. */
+    private fun paint(from: Long, to: Long, all: List<Iv>): List<Span> {
+        val ivs = all.map { Iv(max(it.start, from), min(it.end, to), it.kind) }.filter { it.end > it.start }
+        if (ivs.isEmpty()) return emptyList()
+
+        val points = (ivs.flatMap { listOf(it.start, it.end) } + from + to).distinct().sorted()
+        val out = ArrayList<Span>()
+        for (i in 0 until points.size - 1) {
+            val a = points[i]
+            val b = points[i + 1]
+            val kind = ivs.filter { it.start <= a && it.end >= b }.maxByOrNull { it.kind.ordinal }?.kind ?: continue
+            val last = out.lastOrNull()
+            if (last != null && last.kind == kind && last.end == a) {
+                out[out.size - 1] = Span(kind, last.start, b)
+            } else {
+                out += Span(kind, a, b)
+            }
+        }
+        return out
+    }
+
+    fun shares(spans: List<Span>, from: Long, to: Long): Shares {
+        val total = (to - from).coerceAtLeast(1L).toDouble()
+        fun of(k: Coverage) = spans.filter { it.kind == k }.sumOf { it.end - it.start } / total
+        val on = of(Coverage.ONLINE)
+        val m = of(Coverage.MACHINE_OFFLINE)
+        val r = of(Coverage.RELAY_DOWN)
+        val p = of(Coverage.PHONE_OFFLINE)
+        return Shares(on, m, r, p, (1.0 - on - m - r - p).coerceAtLeast(0.0))
     }
 }

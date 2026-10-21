@@ -1,6 +1,7 @@
 package com.rhshourav.peekesp
 
 import android.appwidget.AppWidgetManager
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipDescription
@@ -8,6 +9,7 @@ import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -29,10 +31,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -45,6 +49,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.NavigationBar
@@ -61,8 +66,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +88,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -101,11 +109,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import com.rhshourav.peekesp.data.AppTheme
 import com.rhshourav.peekesp.data.Battery
 import com.rhshourav.peekesp.data.BatteryLevel
 import com.rhshourav.peekesp.data.FetchResult
 import com.rhshourav.peekesp.data.Fmt
 import com.rhshourav.peekesp.data.History
+import com.rhshourav.peekesp.data.LinkKind
+import com.rhshourav.peekesp.data.Net
+import com.rhshourav.peekesp.data.ThemeConfig
+import com.rhshourav.peekesp.data.WidgetTheme
 import com.rhshourav.peekesp.data.HistoryRange
 import com.rhshourav.peekesp.data.Freshness
 import com.rhshourav.peekesp.data.Machine
@@ -154,21 +168,72 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Installs that predate the no-network-constraint schedule pick the new one up here.
+        if (SetupStore(this).has()) RefreshWorker.schedule(this)
+
         setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    primary = Color(Palette.CYAN), onPrimary = Color(Palette.BG),
-                    background = Color(Palette.BG), onBackground = Color(Palette.TEXT),
-                    surface = Color(Palette.PANEL), onSurface = Color(Palette.TEXT),
-                    outline = Color(Palette.DIM), outlineVariant = Color(Palette.TRACK),
-                    error = Color(Palette.RED),
-                ),
-            ) {
+            var themeMode by remember { mutableStateOf(ThemeConfig.get(this@MainActivity)) }
+            val dark = when (themeMode) {
+                AppTheme.SYSTEM -> isSystemInDarkTheme()
+                AppTheme.LIGHT -> false
+                AppTheme.DARK -> true
+            }
+            // Before anything below reads a colour, so the first frame is already in the right mode.
+            Palette.setAppDark(dark)
+
+            MaterialTheme(colorScheme = peekColorScheme(dark)) {
+                SystemBars(dark, window)
                 // Without a Surface, Text falls back to LocalContentColor's default (black):
-                // unreadable on the dark background.
-                Surface(color = MaterialTheme.colorScheme.background) { Screen(foreground.value) }
+                // unreadable on a dark background.
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    Screen(
+                        foreground = foreground.value,
+                        themeMode = themeMode,
+                        onTheme = {
+                            themeMode = it
+                            ThemeConfig.set(this@MainActivity, it)
+                        },
+                    )
+                }
             }
         }
+    }
+}
+
+/** Material's colours from ours. Every role the app relies on is set, so none falls back to a stock purple. */
+private fun peekColorScheme(dark: Boolean): ColorScheme {
+    val accent = Color(Palette.CYAN)
+    val onAccent = Color(Palette.ON_ACCENT)
+    val bg = Color(Palette.BG)
+    val text = Color(Palette.TEXT)
+    val panel = Color(Palette.PANEL)
+    val dim = Color(Palette.DIM)
+    val track = Color(Palette.TRACK)
+    val error = Color(Palette.RED)
+    return if (dark) {
+        darkColorScheme(
+            primary = accent, onPrimary = onAccent, background = bg, onBackground = text,
+            surface = panel, onSurface = text, surfaceVariant = track, onSurfaceVariant = dim,
+            outline = dim, outlineVariant = track, error = error,
+        )
+    } else {
+        lightColorScheme(
+            primary = accent, onPrimary = onAccent, background = bg, onBackground = text,
+            surface = panel, onSurface = text, surfaceVariant = track, onSurfaceVariant = dim,
+            outline = dim, outlineVariant = track, error = error,
+        )
+    }
+}
+
+/** Status and navigation bar icons that stay readable in both modes, and a window that never flashes the wrong colour. */
+@Composable
+private fun SystemBars(dark: Boolean, window: android.view.Window) {
+    val view = LocalView.current
+    SideEffect {
+        window.setBackgroundDrawable(ColorDrawable(Palette.BG))
+        val controller = WindowCompat.getInsetsController(window, view)
+        controller.isAppearanceLightStatusBars = !dark
+        controller.isAppearanceLightNavigationBars = !dark
     }
 }
 
@@ -195,7 +260,7 @@ private fun Tone.color(): Color = Color(
 private enum class Tab { DASHBOARD, CONFIGURE }
 
 @Composable
-private fun Screen(foreground: Boolean) {
+private fun Screen(foreground: Boolean, themeMode: AppTheme, onTheme: (AppTheme) -> Unit) {
     val ctx = LocalContext.current
     val store = remember { SetupStore(ctx) }
     val cache = remember { WidgetCache(ctx) }
@@ -305,21 +370,40 @@ private fun Screen(foreground: Boolean) {
             val base = RelayConfig.get(ctx)
             val result = withContext(Dispatchers.IO) { RelayClient.fetch(base, keys) }
             val now = System.currentTimeMillis()
+            // The log needs to know how the phone's own path is doing as well as what the machines said,
+            // or a chart cannot tell a dead phone signal from a machine that went quiet.
             snapshot = when (result) {
                 is FetchResult.Ok -> {
                     cache.saveOk(result.raw, result.machines.size, result.latencyMs, now)
-                    withContext(Dispatchers.IO) { runCatching { History.record(ctx, result.machines, now) } }
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            History.record(ctx, result.machines, now)
+                            History.recordLink(ctx, LinkKind.OK, now)
+                        }
+                    }
                     Snapshot(result.machines, now, now, LinkState.LIVE, result.latencyMs)
                 }
                 FetchResult.Empty -> {
                     cache.saveOk("{}", 0, 0, now)
+                    withContext(Dispatchers.IO) { runCatching { History.recordLink(ctx, LinkKind.OK, now) } }
                     Snapshot(emptyList(), now, now, LinkState.LIVE)
                 }
                 FetchResult.AuthRejected -> {
                     cache.saveAuthRejected()
+                    // The relay answered, so the connection is fine; the code is what is wrong.
+                    withContext(Dispatchers.IO) { runCatching { History.recordLink(ctx, LinkKind.OK, now) } }
                     snapshot.copy(nowMs = now, link = LinkState.REJECTED)
                 }
-                is FetchResult.Failed -> snapshot.copy(nowMs = now, link = LinkState.RECONNECTING, error = result.reason)
+                is FetchResult.Failed -> {
+                    // Same failure, two very different causes. Ask the system which.
+                    val kind = Net.failureKind(ctx)
+                    withContext(Dispatchers.IO) { runCatching { History.recordLink(ctx, kind, now) } }
+                    snapshot.copy(
+                        nowMs = now,
+                        link = if (kind == LinkKind.PHONE_OFFLINE) LinkState.PHONE_OFFLINE else LinkState.RELAY_DOWN,
+                        error = result.reason,
+                    )
+                }
             }
             delay(5_000)
         }
@@ -334,7 +418,8 @@ private fun Screen(foreground: Boolean) {
     val chip = when {
         current == null -> ChipState("Not paired", Palette.AMBER)
         snapshot.link == LinkState.LIVE -> ChipState("Live", Palette.GREEN)
-        snapshot.link == LinkState.RECONNECTING -> ChipState("Reconnecting", Palette.AMBER)
+        snapshot.link == LinkState.PHONE_OFFLINE -> ChipState("No internet", Palette.AMBER)
+        snapshot.link == LinkState.RELAY_DOWN -> ChipState("Relay unreachable", Palette.RED)
         snapshot.link == LinkState.REJECTED -> ChipState("Code rejected", Palette.RED)
         else -> ChipState("Connecting", Palette.DIM)
     }
@@ -346,10 +431,11 @@ private fun Screen(foreground: Boolean) {
         containerColor = Color(Palette.BG),
         bottomBar = { BottomTabs(tab) { tab = it } },
     ) { inner ->
+        Box(modifier = Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.TopCenter) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(inner)
+                .widthIn(max = 640.dp)
+                .fillMaxWidth()
                 .verticalScroll(if (tab == Tab.DASHBOARD) dashScroll else configScroll)
                 .padding(horizontal = 20.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -400,8 +486,16 @@ private fun Screen(foreground: Boolean) {
                 }
             } else {
                 // ================= Configure =================
-                Header("Configure", "Widget, history and connection", null)
+                Header("Configure", "Appearance, widget, history and connection", null)
                 notice?.let { NoticeBanner(it) }
+
+                SectionCard(title = "Appearance", subtitle = "How the app looks. The widget has its own setting below.") {
+                    Segmented(
+                        options = AppTheme.values().map { it to it.label },
+                        selected = themeMode,
+                        onSelect = onTheme,
+                    )
+                }
 
                 SectionCard(
                     title = "Widget",
@@ -455,11 +549,15 @@ private fun Screen(foreground: Boolean) {
                 AboutFooter(ctx)
             }
         }
+        }
     }
 
     if (confirmForget) {
         AlertDialog(
             onDismissRequest = { confirmForget = false },
+            containerColor = Color(Palette.PANEL),
+            titleContentColor = Color(Palette.TEXT),
+            textContentColor = Color(Palette.TEXT),
             title = { Text("Forget this setup?") },
             text = {
                 Text(
@@ -755,6 +853,17 @@ private fun WidgetPanel(store: StyleStore, onApply: () -> Unit) {
     )
 
     SubHeading("Look")
+    Segmented(
+        options = WidgetTheme.values().map { it to it.label },
+        selected = look.theme,
+        onSelect = { look = look.copy(theme = it); store.save(look) },
+    )
+    Text(
+        "Match system follows your phone, but a widget is a picture: it changes the next time it " +
+            "redraws (within 15 minutes, on a tap, or when you open the app).",
+        style = MaterialTheme.typography.bodySmall,
+        color = Color(Palette.DIM),
+    )
     StyleSlider(
         label = "Background opacity",
         value = look.opacity,
@@ -887,6 +996,9 @@ private fun RelayDialog(onDismiss: () -> Unit, onChanged: (String) -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = Color(Palette.PANEL),
+        titleContentColor = Color(Palette.TEXT),
+        textContentColor = Color(Palette.TEXT),
         title = { Text("Relay address") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1007,7 +1119,7 @@ internal fun <T> Segmented(
                     label,
                     maxLines = 1,
                     fontWeight = if (on) FontWeight.Bold else FontWeight.Medium,
-                    color = if (on) Color(Palette.BG) else Color(Palette.TEXT),
+                    color = if (on) Color(Palette.ON_ACCENT) else Color(Palette.TEXT),
                 )
             }
         }

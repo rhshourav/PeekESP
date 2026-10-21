@@ -1,0 +1,10 @@
+<resources>
+    <!-- Light by default; values-night swaps in the dark parent. This is only what shows before the
+         app has drawn its first frame, so a light phone does not flash dark on launch. -->
+    <style name="Theme.PeekESP" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/peek_window</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

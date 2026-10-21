@@ -1,6 +1,7 @@
 package com.rhshourav.peekesp.widget
 
 import android.content.Context
+import androidx.compose.runtime.mutableStateOf
 import com.rhshourav.peekesp.data.Battery
 import com.rhshourav.peekesp.data.ClockFmt
 import com.rhshourav.peekesp.data.Fmt
@@ -15,20 +16,59 @@ import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/** The device's own palette (PeekESP.ino). */
+/**
+ * The colours, in two modes. Dark is the device's own palette (PeekESP.ino); light is the same
+ * identity re-tuned for a white card, with every text colour checked to 4.5:1 against both
+ * the page and the card (PaletteTest keeps it that way).
+ *
+ * Every colour is a getter that answers for the mode in force right now, so code that writes
+ * Palette.TEXT does not have to know which mode it is in. Two things decide the mode:
+ *
+ *  - the app's own theme, held as Compose state: anything that reads a colour while composing
+ *    is recomposed when the theme changes;
+ *  - [forMode], which forces a mode for the current thread while something is being drawn. The
+ *    widget uses it, so a light app can still draw a dark widget (and the reverse) without the
+ *    two ever seeing each other's colours.
+ */
 object Palette {
-    val BG = 0xFF05070E.toInt()
-    val PANEL = 0xFF0B1220.toInt()
-    val TRACK = 0xFF1A2334.toInt()
-    val CYAN = 0xFF00E5FF.toInt()
-    val MAGENTA = 0xFFFF2E7E.toInt()
-    val AMBER = 0xFFFFC145.toInt()
-    val GREEN = 0xFF35F2A0.toInt()
-    val RED = 0xFFFF4D6D.toInt()
-    val TEXT = 0xFFE6EDF7.toInt()
+    private val appDark = mutableStateOf(true)
+    private val forced = ThreadLocal<Boolean>()
+
+    val isDark: Boolean get() = forced.get() ?: appDark.value
+
+    fun setAppDark(dark: Boolean) {
+        if (appDark.value != dark) appDark.value = dark
+    }
+
+    /** Runs [block] with [dark] in force on this thread, then puts back whatever was there. */
+    fun <T> forMode(dark: Boolean, block: () -> T): T {
+        val previous = forced.get()
+        forced.set(dark)
+        try {
+            return block()
+        } finally {
+            if (previous == null) forced.remove() else forced.set(previous)
+        }
+    }
+
+    private fun pick(dark: Long, light: Long): Int = (if (isDark) dark else light).toInt()
+
+    val BG: Int get() = pick(0xFF05070E, 0xFFF3F6FB)
+    val PANEL: Int get() = pick(0xFF0B1220, 0xFFFFFFFF)
+    val TRACK: Int get() = pick(0xFF1A2334, 0xFFD5DDEA)
+    val CYAN: Int get() = pick(0xFF00E5FF, 0xFF00788C)
+    val MAGENTA: Int get() = pick(0xFFFF2E7E, 0xFFC81E66)
+    val AMBER: Int get() = pick(0xFFFFC145, 0xFF9A6200)
+    val GREEN: Int get() = pick(0xFF35F2A0, 0xFF077A4B)
+    val RED: Int get() = pick(0xFFFF4D6D, 0xFFC62840)
+    val TEXT: Int get() = pick(0xFFE6EDF7, 0xFF0B1220)
+    val VIOLET: Int get() = pick(0xFFB28DFF, 0xFF6B3FD4)
+
+    /** Text and glyphs that sit on an accent colour (a selected tab, a primary button). */
+    val ON_ACCENT: Int get() = pick(0xFF05070E, 0xFFFFFFFF)
 
     /** Lighter than the device's 5C6B82, which is only 3.7:1 on its own background. Glass needs more. */
-    val DIM = 0xFF93A3BA.toInt()
+    val DIM: Int get() = pick(0xFF93A3BA, 0xFF55657D)
 
     // The device's load_color(): the accent stays on-brand until a reading gets uncomfortable.
     const val WARN_FROM = 75.0
@@ -42,11 +82,22 @@ object Palette {
     }
 }
 
-enum class Link(val label: String, val color: Int) {
-    OK("LINK OK", Palette.GREEN),
-    STALE("STALE", Palette.AMBER),
-    NONE("NO LINK", Palette.RED),
+enum class Link(val label: String) {
+    OK("LINK OK"),
+    STALE("STALE"),
+    NONE("NO LINK");
+
+    /** Read when drawn, so it is right for the mode being drawn. */
+    val color: Int
+        get() = when (this) {
+            OK -> Palette.GREEN
+            STALE -> Palette.AMBER
+            NONE -> Palette.RED
+        }
 }
+
+/** How a status message is coloured. A name, not a colour, because the colour depends on the mode. */
+enum class MessageTone { DIM, AMBER, RED }
 
 /** What a page of the widget shows. The device has the same three. */
 enum class PageKind { MACHINE, POWER, CLOCK }
@@ -94,7 +145,7 @@ data class Frame(
     val link: Link = Link.STALE,
     val latencyMs: Long = 0,
     val message: String? = null,
-    val messageColor: Int = Palette.DIM,
+    val messageTone: MessageTone = MessageTone.DIM,
     val kind: PageKind = PageKind.MACHINE,
     /** Wall clock when this frame was built; the clock page prints the date from it. */
     val nowMs: Long = 0,
@@ -160,17 +211,17 @@ object FrameBuilder {
 
     fun build(ctx: Context, nowMs: Long): Frame {
         if (!SetupStore(ctx).has()) {
-            return Frame(null, message = "Not paired. Open PeekESP and enter your code.", messageColor = Palette.AMBER)
+            return Frame(null, message = "Not paired. Open PeekESP and enter your code.", messageTone = MessageTone.AMBER)
         }
         val cached = WidgetCache(ctx).read()
             ?: return Frame(null, message = "Waiting for the first reading...")
         if (cached.status == WidgetCache.Status.AUTH) {
-            return Frame(null, message = "Code rejected. Pair again in the app.", messageColor = Palette.RED)
+            return Frame(null, message = "Code rejected. Pair again in the app.", messageTone = MessageTone.RED)
         }
         val machines = try {
             Parser.parse(cached.raw)
         } catch (e: Exception) {
-            return Frame(null, message = "Unreadable reply from the relay.", messageColor = Palette.RED)
+            return Frame(null, message = "Unreadable reply from the relay.", messageTone = MessageTone.RED)
         }
 
         val look = StyleStore(ctx).read()

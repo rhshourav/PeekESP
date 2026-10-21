@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- The only permission this slice asks for. WorkManager merges a few of its
-         own into the final manifest; read them from the merged manifest before a
-         release rather than trusting this file. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets the app tell "this phone has no internet" from "the relay did not answer", so a
+         chart can show which. Only reads the connection state; it cannot change anything. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- WorkManager merges a few of its own into the final manifest; read them from the merged
+         manifest before a release rather than trusting this file. -->
 
     <application
         android:allowBackup="false"
@@ -12,7 +14,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:theme="@style/Theme.PeekESP"
         android:usesCleartextTraffic="false">
 
         <activity
