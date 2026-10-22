@@ -56,6 +56,7 @@ import com.rhshourav.peekesp.data.History
 import com.rhshourav.peekesp.data.HistoryConfig
 import com.rhshourav.peekesp.data.HistoryRange
 import com.rhshourav.peekesp.data.Machine
+import com.rhshourav.peekesp.data.Metrics
 import com.rhshourav.peekesp.data.Parser
 import com.rhshourav.peekesp.data.PowerState
 import com.rhshourav.peekesp.data.Stat
@@ -330,6 +331,31 @@ private fun MachineHistory(m: Machine, snap: Snapshot, range: HistoryRange, onRa
             bands = outages + ChartMath.flagBands(d.buckets.map { it.t to it.charging }, d.bucketMs / 2, gap)
                 .map { (a, b) -> Band(BandKind.CHARGING, a, b) },
             note = "Green shading marks when it was charging.",
+        )
+    }
+
+    // Anything else this machine reports (a GPU, an NPU, a fan, a power meter...): one card each, with
+    // no change to the app when a new kind of sensor appears.
+    val tones = listOf(Palette.VIOLET, Palette.AMBER, Palette.GREEN, Palette.MAGENTA, Palette.CYAN)
+    d.extras.forEachIndexed { i, x ->
+        val st = x.stat ?: return@forEachIndexed
+        val live = m.extras.firstOrNull { it.key == x.key }
+        val def = Metrics.def(x.key)
+        val unit = live?.unit ?: def.unit
+        val label = live?.label ?: def.label
+        val accent = Color(tones[i % tones.size])
+        val (lo, hi) = when (unit) {
+            "%" -> 0.0 to 100.0
+            "\u00B0C" -> ChartMath.axisFor(st.min, st.max)
+            else -> 0.0 to ChartMath.niceCeil(max(st.max * 1.1, 1.0))
+        }
+        MetricCard(
+            title = label,
+            live = live?.let { Metrics.format(it.value, unit) } ?: "--",
+            accent = accent, d = d,
+            series = listOf(ChartSeries(label, "", accent, x.points)),
+            yMin = lo, yMax = hi, fmt = { Metrics.format(it, unit) },
+            stats = listOf("" to st), bands = outages,
         )
     }
 }

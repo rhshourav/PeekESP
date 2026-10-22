@@ -10,6 +10,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.rhshourav.peekesp.data.AlertRunner
 import com.rhshourav.peekesp.data.FetchResult
 import com.rhshourav.peekesp.data.History
 import com.rhshourav.peekesp.data.LinkKind
@@ -57,6 +58,8 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
                     History.record(app, r.machines, now)
                     History.recordLink(app, LinkKind.OK, now)
                 }
+                // The same engine the open app uses, so an alert does not depend on which of them noticed.
+                runCatching { AlertRunner.process(app, r.machines, now) }
             }
             FetchResult.Empty -> {
                 val now = System.currentTimeMillis()

@@ -34,7 +34,12 @@ data class ChartData(
     val stats: Stats,
     /** What was happening across the window: online, machine offline, phone offline, relay unreachable. */
     val spans: List<Span>,
+    /** Sensors beyond the standard set (GPU, NPU, fan...), each with its own line. */
+    val extras: List<ExtraChart> = emptyList(),
 )
+
+/** One extra sensor over the window: bucketed averages for the line, exact min/avg/max for the numbers. */
+data class ExtraChart(val key: String, val points: List<Pair<Long, Double?>>, val stat: Stat?)
 
 /** The two choices the user has: keep a history at all, and for how long. */
 object HistoryConfig {
@@ -47,7 +52,7 @@ object HistoryConfig {
     fun setRetentionDays(ctx: Context, days: Int) = p(ctx).edit().putInt("days", days.coerceIn(1, 30)).apply()
 }
 
-private class HistoryDb(context: Context) : SQLiteOpenHelper(context.applicationContext, "history.db", null, 2) {
+private class HistoryDb(context: Context) : SQLiteOpenHelper(context.applicationContext, "history.db", null, 3) {
     override fun onConfigure(db: SQLiteDatabase) {
         // Readers (the dashboard) never block the writer (the widget's worker), or the other way round.
         db.enableWriteAheadLogging()
@@ -62,11 +67,19 @@ private class HistoryDb(context: Context) : SQLiteOpenHelper(context.application
         )
         db.execSQL("CREATE INDEX samples_machine_t ON samples (machine, t)")
         createV2(db)
+        createV3(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         // Readings are kept; only the new tables are added.
         if (oldVersion < 2) createV2(db)
+        if (oldVersion < 3) createV3(db)
+    }
+
+    /** One row per extra sensor per reading: any number of them, and no change to the table above when a new one appears. */
+    private fun createV3(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE extra (machine TEXT NOT NULL, t INTEGER NOT NULL, k TEXT NOT NULL, v REAL NOT NULL)")
+        db.execSQL("CREATE INDEX extra_machine_k_t ON extra (machine, k, t)")
     }
 
     private fun createV2(db: SQLiteDatabase) {
@@ -143,6 +156,14 @@ object History {
                 v.put("charging", if (m.charging) 1 else 0)
                 v.put("ac", if (m.ac) 1 else 0)
                 d.insert("samples", null, v)
+                for (x in m.extras) {
+                    val xv = ContentValues()
+                    xv.put("machine", m.host)
+                    xv.put("t", t)
+                    xv.put("k", x.key)
+                    xv.put("v", x.value)
+                    d.insert("extra", null, xv)
+                }
                 lastT[m.host] = t
             }
             d.setTransactionSuccessful()
@@ -218,6 +239,7 @@ object History {
     private fun pruneLocked(ctx: Context, d: SQLiteDatabase) {
         val cutoff = System.currentTimeMillis() - HistoryConfig.retentionDays(ctx) * 86_400_000L
         d.delete("samples", "t < ?", arrayOf(cutoff.toString()))
+        d.delete("extra", "t < ?", arrayOf(cutoff.toString()))
         d.delete("link", "t < ?", arrayOf(cutoff.toString()))
         d.delete("offline", "seen < ?", arrayOf(cutoff.toString()))
     }
@@ -226,8 +248,10 @@ object History {
     fun clear(ctx: Context) {
         val d = db(ctx).writableDatabase
         d.delete("samples", null, null)
+        d.delete("extra", null, null)
         d.delete("link", null, null)
         d.delete("offline", null, null)
+        baselines.clear()
         lastT.clear()
         openOffline.clear()
         lastLink = null
@@ -301,7 +325,63 @@ object History {
             joinGapMs = ChartMath.gapMs(bucket), tailMs = bucket,
             link = link, machineOffline = silent,
         )
-        return ChartData(range, from, now, bucket, buckets, stats, spans)
+
+        // Extra sensors: whichever ones this machine reported in the window.
+        val keys = ArrayList<String>()
+        d.rawQuery("SELECT DISTINCT k FROM extra WHERE machine = ? AND t >= $from ORDER BY k", arrayOf(machine))
+            .use { c -> while (c.moveToNext()) keys += c.getString(0) }
+        val extras = keys.map { k ->
+            val pts = ArrayList<Pair<Long, Double?>>()
+            d.rawQuery(
+                "SELECT AVG(t), AVG(v) FROM extra WHERE machine = ? AND k = ? AND t >= $from GROUP BY t / $bucket ORDER BY 1",
+                arrayOf(machine, k),
+            ).use { c -> while (c.moveToNext()) pts += c.getDouble(0).toLong() to c.dbl(1) }
+            val st = d.rawQuery(
+                "SELECT MIN(v), AVG(v), MAX(v) FROM extra WHERE machine = ? AND k = ? AND t >= $from",
+                arrayOf(machine, k),
+            ).use { c -> if (c.moveToFirst()) c.stat(0) else null }
+            ExtraChart(k, pts, st)
+        }
+        return ChartData(range, from, now, bucket, buckets, stats, spans, extras)
+    }
+
+    private val baselines = HashMap<String, Pair<Long, Baseline?>>()
+    private const val BASELINE_TTL_MS = 5 * 60_000L
+    private const val BASELINE_BUCKET_MS = 10 * 60_000L
+
+    /**
+     * How [metric] normally behaves on [machine]: the last day in ten-minute averages, leaving out the
+     * most recent ten minutes so an incident cannot become its own baseline. Null if there is not
+     * enough history to say (or history is off): then nothing is called unusual.
+     * Kept for five minutes: a rule asks every few seconds, and the answer does not change that fast.
+     */
+    @Synchronized
+    fun baseline(ctx: Context, machine: String, metric: String, nowMs: Long): Baseline? {
+        val cacheKey = "$machine|$metric"
+        baselines[cacheKey]?.let { (at, b) -> if (nowMs - at < BASELINE_TTL_MS) return b }
+        if (!HistoryConfig.enabled(ctx)) return null
+
+        val from = nowMs - 86_400_000L
+        val to = nowMs - BASELINE_BUCKET_MS
+        val d = db(ctx).readableDatabase
+        val col = Metrics.sqlColumn(metric)
+        val values = ArrayList<Double>()
+        val cursor = if (col != null) {
+            d.rawQuery(
+                "SELECT AVG($col) FROM samples WHERE machine = ? AND t >= $from AND t < $to " +
+                    "GROUP BY t / $BASELINE_BUCKET_MS HAVING AVG($col) IS NOT NULL",
+                arrayOf(machine),
+            )
+        } else {
+            d.rawQuery(
+                "SELECT AVG(v) FROM extra WHERE machine = ? AND k = ? AND t >= $from AND t < $to GROUP BY t / $BASELINE_BUCKET_MS",
+                arrayOf(machine, metric),
+            )
+        }
+        cursor.use { c -> while (c.moveToNext()) values += c.getDouble(0) }
+        val b = Anomaly.baseline(values)
+        baselines[cacheKey] = nowMs to b
+        return b
     }
 
     private fun Cursor.dbl(i: Int): Double? = if (isNull(i)) null else getDouble(i)

@@ -5,6 +5,10 @@
     <!-- Lets the app tell "this phone has no internet" from "the relay did not answer", so a
          chart can show which. Only reads the connection state; it cannot change anything. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Android 13+ asks the user before an app may show notifications. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Critical alerts vibrate as well as ring. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- WorkManager merges a few of its own into the final manifest; read them from the merged
          manifest before a release rather than trusting this file. -->
 
@@ -19,7 +23,8 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -36,5 +41,20 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/peek_widget_info" />
         </receiver>
+
+        <!-- Other apps (a security tool, Tasker, a script over adb) post messages through this.
+             It is exported so they can, and answers only to the key the user generates in the app. -->
+        <receiver
+            android:name=".data.ExternalMessageReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.rhshourav.peekesp.action.SEND_MESSAGE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- The "Silence" button on a critical notification. Ours alone. -->
+        <receiver
+            android:name=".data.NotificationActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

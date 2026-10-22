@@ -48,6 +48,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -71,6 +73,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -85,6 +88,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -110,6 +114,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import com.rhshourav.peekesp.data.AlarmPlayer
+import com.rhshourav.peekesp.data.AlertBus
+import com.rhshourav.peekesp.data.AlertRunner
+import com.rhshourav.peekesp.data.AlertStore
 import com.rhshourav.peekesp.data.AppTheme
 import com.rhshourav.peekesp.data.Battery
 import com.rhshourav.peekesp.data.BatteryLevel
@@ -118,6 +126,7 @@ import com.rhshourav.peekesp.data.Fmt
 import com.rhshourav.peekesp.data.History
 import com.rhshourav.peekesp.data.LinkKind
 import com.rhshourav.peekesp.data.Net
+import com.rhshourav.peekesp.data.Notifier
 import com.rhshourav.peekesp.data.ThemeConfig
 import com.rhshourav.peekesp.data.WidgetTheme
 import com.rhshourav.peekesp.data.HistoryRange
@@ -156,6 +165,15 @@ class MainActivity : ComponentActivity() {
     /** True between onStart and onStop. The live dashboard only polls while the app can be seen. */
     private val foreground = mutableStateOf(false)
 
+    /** Set when the app is opened from one of its notifications, so it can land on Alerts. */
+    private val openAlerts = mutableStateOf(false)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(Notifier.EXTRA_OPEN_ALERTS, false)) openAlerts.value = true
+    }
+
     override fun onStart() {
         super.onStart()
         foreground.value = true
@@ -170,6 +188,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Installs that predate the no-network-constraint schedule pick the new one up here.
         if (SetupStore(this).has()) RefreshWorker.schedule(this)
+        openAlerts.value = intent?.getBooleanExtra(Notifier.EXTRA_OPEN_ALERTS, false) == true
 
         setContent {
             var themeMode by remember { mutableStateOf(ThemeConfig.get(this@MainActivity)) }
@@ -193,6 +212,8 @@ class MainActivity : ComponentActivity() {
                             themeMode = it
                             ThemeConfig.set(this@MainActivity, it)
                         },
+                        jumpToAlerts = openAlerts.value,
+                        onJumped = { openAlerts.value = false },
                     )
                 }
             }
@@ -257,10 +278,19 @@ private fun Tone.color(): Color = Color(
     },
 )
 
-private enum class Tab { DASHBOARD, CONFIGURE }
+private enum class Tab { DASHBOARD, ALERTS, CONFIGURE }
+
+/** Configure has a lot in it: the everyday settings, and everything about alerts. */
+private enum class ConfigPage { GENERAL, ALERTS }
 
 @Composable
-private fun Screen(foreground: Boolean, themeMode: AppTheme, onTheme: (AppTheme) -> Unit) {
+private fun Screen(
+    foreground: Boolean,
+    themeMode: AppTheme,
+    onTheme: (AppTheme) -> Unit,
+    jumpToAlerts: Boolean,
+    onJumped: () -> Unit,
+) {
     val ctx = LocalContext.current
     val store = remember { SetupStore(ctx) }
     val cache = remember { WidgetCache(ctx) }
@@ -279,6 +309,15 @@ private fun Screen(foreground: Boolean, themeMode: AppTheme, onTheme: (AppTheme)
     var relay by remember { mutableStateOf(RelayConfig.get(ctx)) }
 
     var tab by rememberSaveable { mutableStateOf(Tab.DASHBOARD) }
+    var configPage by rememberSaveable { mutableStateOf(ConfigPage.GENERAL) }
+
+    // What the Alerts tab's badge counts, and which critical ones are still unanswered.
+    val unreadCount by produceState(0, AlertBus.version.value) {
+        value = withContext(Dispatchers.IO) { runCatching { AlertStore.unreadCount(ctx) }.getOrDefault(0) }
+    }
+    val unreadCritical by produceState(emptyList<Long>(), AlertBus.version.value) {
+        value = withContext(Dispatchers.IO) { runCatching { AlertStore.unreadCritical(ctx).map { it.id } }.getOrDefault(emptyList()) }
+    }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var range by rememberSaveable { mutableStateOf(HistoryRange.H1) }
     var snapshot by remember { mutableStateOf(readSnapshot(ctx)) }
@@ -380,6 +419,8 @@ private fun Screen(foreground: Boolean, themeMode: AppTheme, onTheme: (AppTheme)
                             History.record(ctx, result.machines, now)
                             History.recordLink(ctx, LinkKind.OK, now)
                         }
+                        // Separate, so a history problem never stops an alert.
+                        runCatching { AlertRunner.process(ctx, result.machines, now) }
                     }
                     Snapshot(result.machines, now, now, LinkState.LIVE, result.latencyMs)
                 }
@@ -409,6 +450,21 @@ private fun Screen(foreground: Boolean, themeMode: AppTheme, onTheme: (AppTheme)
         }
     }
 
+    // Opened from a notification: land where the news is.
+    LaunchedEffect(jumpToAlerts) {
+        if (jumpToAlerts) {
+            tab = Tab.ALERTS
+            onJumped()
+        }
+    }
+
+    // A critical alert is still unanswered. Normally its notification is what rings. This is for the one
+    // case with nothing else to make a noise: the app is open and the phone will not show notifications.
+    LaunchedEffect(unreadCritical, foreground) {
+        if (unreadCritical.isEmpty() || !foreground) AlarmPlayer.stop()
+        else if (!Notifier.canPost(ctx)) AlarmPlayer.ring(ctx)
+    }
+
     // Leaving the app: the cache is now newer than the widget, so redraw it once.
     LaunchedEffect(foreground) { if (!foreground) redrawWidgets(ctx) }
 
@@ -426,17 +482,24 @@ private fun Screen(foreground: Boolean, themeMode: AppTheme, onTheme: (AppTheme)
     // One scroll position per tab, so switching back finds you where you were.
     val dashScroll = rememberScrollState()
     val configScroll = rememberScrollState()
+    val alertsScroll = rememberScrollState()
 
     Scaffold(
         containerColor = Color(Palette.BG),
-        bottomBar = { BottomTabs(tab) { tab = it } },
+        bottomBar = { BottomTabs(tab, unreadCount) { tab = it } },
     ) { inner ->
         Box(modifier = Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.TopCenter) {
         Column(
             modifier = Modifier
                 .widthIn(max = 640.dp)
                 .fillMaxWidth()
-                .verticalScroll(if (tab == Tab.DASHBOARD) dashScroll else configScroll)
+                .verticalScroll(
+                    when (tab) {
+                        Tab.DASHBOARD -> dashScroll
+                        Tab.ALERTS -> alertsScroll
+                        Tab.CONFIGURE -> configScroll
+                    },
+                )
                 .padding(horizontal = 20.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -484,10 +547,22 @@ private fun Screen(foreground: Boolean, themeMode: AppTheme, onTheme: (AppTheme)
                         onRange = { range = it },
                     )
                 }
+            } else if (tab == Tab.ALERTS) {
+                // ================= Alerts =================
+                Header("Alerts", "Machines, rules and messages that need you", null)
+                notice?.let { NoticeBanner(it) }
+                AlertsPanel(onOpenConfigure = { configPage = ConfigPage.ALERTS; tab = Tab.CONFIGURE })
             } else {
                 // ================= Configure =================
-                Header("Configure", "Appearance, widget, history and connection", null)
+                Header("Configure", "Appearance, widget, history, alerts and connection", null)
                 notice?.let { NoticeBanner(it) }
+                Segmented(
+                    options = listOf(ConfigPage.GENERAL to "General", ConfigPage.ALERTS to "Alerts"),
+                    selected = configPage,
+                    onSelect = { configPage = it },
+                )
+
+                if (configPage == ConfigPage.GENERAL) {
 
                 SectionCard(title = "Appearance", subtitle = "How the app looks. The widget has its own setting below.") {
                     Segmented(
@@ -547,6 +622,13 @@ private fun Screen(foreground: Boolean, themeMode: AppTheme, onTheme: (AppTheme)
                 }
 
                 AboutFooter(ctx)
+                } else {
+                    AlertSettingsPanel(
+                        machines = snapshot.machines,
+                        foreground = foreground,
+                        notify = { notice = Notice(it, Tone.OK) },
+                    )
+                }
             }
         }
         }
@@ -640,8 +722,10 @@ private fun StatusChip(chip: ChipState) {
     }
 }
 
+private enum class TabGlyph { DASHBOARD, ALERTS, CONFIGURE }
+
 @Composable
-private fun BottomTabs(tab: Tab, onSelect: (Tab) -> Unit) {
+private fun BottomTabs(tab: Tab, unread: Int, onSelect: (Tab) -> Unit) {
     val cyan = Color(Palette.CYAN)
     val colors = NavigationBarItemDefaults.colors(
         selectedIconColor = cyan, selectedTextColor = cyan,
@@ -651,34 +735,67 @@ private fun BottomTabs(tab: Tab, onSelect: (Tab) -> Unit) {
     NavigationBar(containerColor = Color(Palette.PANEL)) {
         NavigationBarItem(
             selected = tab == Tab.DASHBOARD, onClick = { onSelect(Tab.DASHBOARD) },
-            icon = { TabIcon(dashboard = true) }, label = { Text("Dashboard") }, colors = colors,
+            icon = { TabIcon(TabGlyph.DASHBOARD) }, label = { Text("Dashboard") }, colors = colors,
+        )
+        NavigationBarItem(
+            selected = tab == Tab.ALERTS, onClick = { onSelect(Tab.ALERTS) },
+            icon = {
+                BadgedBox(
+                    badge = {
+                        if (unread > 0) {
+                            Badge(containerColor = Color(Palette.RED), contentColor = Color.White) {
+                                Text(if (unread > 99) "99+" else "$unread")
+                            }
+                        }
+                    },
+                    modifier = Modifier.semantics { contentDescription = if (unread > 0) "$unread unread" else "" },
+                ) { TabIcon(TabGlyph.ALERTS) }
+            },
+            label = { Text("Alerts") }, colors = colors,
         )
         NavigationBarItem(
             selected = tab == Tab.CONFIGURE, onClick = { onSelect(Tab.CONFIGURE) },
-            icon = { TabIcon(dashboard = false) }, label = { Text("Configure") }, colors = colors,
+            icon = { TabIcon(TabGlyph.CONFIGURE) }, label = { Text("Configure") }, colors = colors,
         )
     }
 }
 
-/** Drawn, not imported: no icon library for two glyphs. Takes the colour the bar gives its icons. */
+/** Drawn, not imported: no icon library for three glyphs. Takes the colour the bar gives its icons. */
 @Composable
-private fun TabIcon(dashboard: Boolean) {
+private fun TabIcon(glyph: TabGlyph) {
     val c = LocalContentColor.current
     Canvas(Modifier.size(24.dp)) {
         val s = size.width
-        if (dashboard) {
-            val gap = s * 0.12f
-            val cell = (s - gap) / 2f
-            for (i in 0..1) for (j in 0..1) {
-                drawRoundRect(c, Offset(i * (cell + gap), j * (cell + gap)), Size(cell, cell), CornerRadius(s * 0.1f))
+        when (glyph) {
+            TabGlyph.DASHBOARD -> {
+                val gap = s * 0.12f
+                val cell = (s - gap) / 2f
+                for (i in 0..1) for (j in 0..1) {
+                    drawRoundRect(c, Offset(i * (cell + gap), j * (cell + gap)), Size(cell, cell), CornerRadius(s * 0.1f))
+                }
             }
-        } else {
-            val ys = floatArrayOf(0.2f, 0.5f, 0.8f)
-            val knobs = floatArrayOf(0.66f, 0.30f, 0.70f)
-            for (i in 0..2) {
-                val y = ys[i] * s
-                drawLine(c, Offset(s * 0.08f, y), Offset(s * 0.92f, y), strokeWidth = s * 0.09f, cap = StrokeCap.Round)
-                drawCircle(c, s * 0.13f, Offset(knobs[i] * s, y))
+            TabGlyph.ALERTS -> {
+                // A bell: a dome, a flared skirt, and the clapper.
+                val bell = Path().apply {
+                    moveTo(s * 0.50f, s * 0.10f)
+                    cubicTo(s * 0.27f, s * 0.10f, s * 0.25f, s * 0.32f, s * 0.25f, s * 0.50f)
+                    lineTo(s * 0.13f, s * 0.70f)
+                    lineTo(s * 0.87f, s * 0.70f)
+                    lineTo(s * 0.75f, s * 0.50f)
+                    cubicTo(s * 0.75f, s * 0.32f, s * 0.73f, s * 0.10f, s * 0.50f, s * 0.10f)
+                    close()
+                }
+                drawPath(bell, c)
+                drawCircle(c, s * 0.10f, Offset(s * 0.50f, s * 0.84f))
+            }
+            TabGlyph.CONFIGURE -> {
+                val ys = floatArrayOf(0.2f, 0.5f, 0.8f)
+                val knobs = floatArrayOf(0.66f, 0.30f, 0.70f)
+                for (i in 0..2) {
+                    val y = ys[i] * s
+                    drawLine(c, Offset(s * 0.08f, y), Offset(s * 0.92f, y), strokeWidth = s * 0.09f, cap = StrokeCap.Round)
+                    drawCircle(c, s * 0.13f, Offset(knobs[i] * s, y))
+                }
             }
         }
     }
