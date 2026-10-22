@@ -3,6 +3,7 @@
 <img src="img/Git_Logo.png" alt="PeekESP" width="560">
 
 # PeekESP
+Peek Essential Status Panel
 
 **Cross-platform system monitoring — from Android home-screen widgets to dedicated ESP32 displays.**
 
