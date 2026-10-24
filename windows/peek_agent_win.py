@@ -15,6 +15,11 @@ small. See build.py to produce a single-file executable.
 
     Push to a relay:  peek_agent_win.py --push https://.../ingest/me --token ...
     Serve on the LAN: peek_agent_win.py
+    Leave a message:  peek_agent_win.py notify --severity red --title "..."
+
+Beyond that standard reading, the agent can add GPU / NPU / fan / power sensors
+and your own, and carry messages for the phone - see peek_sensors.py,
+peek_messages.py and PROTOCOL.md.
 """
 
 import ctypes
@@ -27,6 +32,8 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import peek_services
 
 BIND = "0.0.0.0"
 PORT = 6595
@@ -247,7 +254,7 @@ TEMP_TTL = 20.0
 # A machine with no usable source at all backs off rather than launching
 # PowerShell every 20 seconds until the end of time.
 TEMP_TTL_MAX = 300.0
-LHM_PORTS = (6596, 6597)
+LHM_PORTS = (8085, 6596, 6597)     # 8085 is its default; see README
 
 
 def _powershell(command, timeout=8):
@@ -433,7 +440,35 @@ def _uptime_seconds():
     return int(kernel32.GetTickCount64() / 1000)
 
 
-def snapshot():
+# Set by whoever starts the agent. Until then the reading is the standard one
+# and nothing below changes, which is also how an old build behaves.
+_services = None
+
+
+def snapshot(messages=True):
+    """One reading.
+
+    messages=False leaves the outbox out. The LAN endpoint passes it: that
+    listens on every interface with no password, and a message such as "new
+    login from 203.0.113.9" is not for whoever happens to be on the network.
+    The relay path keeps them, because that is how they reach the phone.
+    """
+    snap = _standard()
+    svc = _services
+    if svc is not None:
+        plain, metrics = svc.extras_payload()
+        for k, v in plain.items():
+            snap.setdefault(k, v)            # never shadow a standard reading
+        if metrics:
+            snap["metrics"] = metrics
+        if messages:
+            msgs = svc.outbox.active()
+            if msgs:
+                snap["messages"] = msgs
+    return snap
+
+
+def _standard():
     with _lock:
         rolling = dict(_state)
     pct, total, free = _storage()
@@ -463,7 +498,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.split("?")[0] not in (PATH, "/"):
             self.send_error(404)
             return
-        body = json.dumps(snapshot()).encode()
+        body = json.dumps(snapshot(messages=False)).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -504,9 +539,87 @@ def push_loop(url, token, interval):
         time.sleep(interval)
 
 
-def main():
-    global PORT
+def notify_cli(argv):
+    """peek-agent notify ... : leave a message for the phone.
+
+    Default is to drop a file in the outbox folder, which needs no key and
+    works even if the agent is not running yet - the message waits and goes out
+    when it starts. --http posts to the running agent's local endpoint instead,
+    which is the route for a service running as a different user.
+    """
     import argparse
+    import peek_config
+    import peek_messages as pm
+
+    ap = argparse.ArgumentParser(
+        prog="peek-agent notify",
+        description="Leave a message for your phone, through this PC's agent.")
+    ap.add_argument("--title", default="", help="up to 80 characters")
+    ap.add_argument("--message", "--body", dest="body", default="",
+                    help="up to 400 characters")
+    ap.add_argument("--severity", default="info",
+                    help="info, warning or critical (red / yellow also work). "
+                         "Critical rings the phone like an alarm.")
+    ap.add_argument("--source", default="", help="who is speaking, shown on the phone")
+    ap.add_argument("--id", default="",
+                    help="same id twice counts once, so a retry is safe")
+    ap.add_argument("--ts", default="", help="when it happened, epoch seconds")
+    ap.add_argument("--http", action="store_true",
+                    help="POST to the local endpoint instead of dropping a file")
+    ap.add_argument("--outbox", metavar="DIR", help="folder to drop the file in")
+    a = ap.parse_args(argv)
+
+    if not (a.title or a.body):
+        ap.error("give --title or --message")
+    if not pm.is_known_severity(a.severity):
+        print(f"note: '{a.severity}' is not a severity the phone knows; "
+              "it will show as info", file=sys.stderr)
+
+    raw = {"title": a.title, "body": a.body, "severity": a.severity}
+    for k in ("source", "id", "ts"):
+        if getattr(a, k):
+            raw[k] = getattr(a, k)
+
+    cfg = peek_config.load()
+    if a.http:
+        import urllib.error
+        import urllib.request
+        if not cfg["notify_key"]:
+            print("no notify_key in config.json yet - start the agent once first",
+                  file=sys.stderr)
+            return 1
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{cfg['notify_port']}/notify",
+            data=json.dumps(raw).encode(), method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer " + cfg["notify_key"]})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                print(r.read().decode())
+            return 0
+        except urllib.error.HTTPError as e:
+            print(f"refused: HTTP {e.code} {e.reason}", file=sys.stderr)
+        except OSError as e:
+            print(f"could not reach the agent on port {cfg['notify_port']}: {e}",
+                  file=sys.stderr)
+        return 1
+
+    folder = a.outbox or str(peek_config.config_dir() / "outbox")
+    try:
+        path = pm.drop_file(folder, raw)
+    except OSError as e:
+        print(f"could not write to {folder}: {e}", file=sys.stderr)
+        return 1
+    print(f"queued: {path}")
+    return 0
+
+
+def main():
+    global PORT, _services
+    import argparse
+
+    if len(sys.argv) > 1 and sys.argv[1] == "notify":
+        sys.exit(notify_cli(sys.argv[2:]))
 
     ap = argparse.ArgumentParser(description="PeekESP telemetry agent for Windows")
     ap.add_argument("--push", metavar="URL",
@@ -523,12 +636,12 @@ def main():
                     help="take settings from %%APPDATA%%\\PeekESP\\config.json")
     args = ap.parse_args()
 
-    # --config lets a service or scheduled task run with no secrets on its
-    # command line, where they would otherwise be visible to every process
-    # listing on the machine. Explicit flags still win over the file.
+    # The relay settings come from the file only with --config (see below), but
+    # sensors, alert rules and the message outbox are always read from it: they
+    # are not secrets, and there is no flag for any of them.
+    import peek_config
+    cfg = peek_config.load()
     if args.config:
-        import peek_config
-        cfg = peek_config.load()
         if cfg.get("_error"):
             print("config: " + cfg["_error"], flush=True)
         if not args.push and cfg["mode"] in ("push", "both"):
@@ -541,13 +654,29 @@ def main():
             args.no_serve = True
         PORT = cfg["serve_port"]
 
+    for w in cfg.get("_warnings", []):
+        print("config: " + w, flush=True)
+
     threading.Thread(target=_sampler, daemon=True).start()
     if not _primed.wait(SAMPLE_SECONDS * 3):   # wait for a real delta, not a guess
         print("warning: first sample did not arrive; rates may read 0", flush=True)
 
+    _services = peek_services.Services(
+        cfg, lambda: snapshot(messages=False), socket.gethostname()[:19])
+
     if args.once:
+        # Ask every sensor source right now instead of waiting for the thread,
+        # so this really is "can the agent see my GPU".
+        _services.extras.collect_once(force=True)
         print(json.dumps(snapshot(), indent=2))
         return
+
+    _services.start()
+    for line in _services.problems():
+        print("warning: " + line, flush=True)
+    if _services.server is not None and not _services.server.error:
+        print("notify: 127.0.0.1:%d  (key in config.json)" % cfg["notify_port"],
+              flush=True)
 
     if args.push and not args.token:
         ap.error("--push needs --token (or the PEEK_PUSH_TOKEN environment variable)")

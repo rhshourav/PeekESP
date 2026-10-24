@@ -103,6 +103,12 @@ without restarting.
 }
 ```
 
+Alerts, sensors and messages add more keys (`alerts`, `sensors`, `sensors_enabled`,
+`extras_interval`, `message_ttl_hours`, `notify_enabled`, `notify_port`, `notify_key`).
+All optional, and the window writes them for you. A mistake in a hand-edited one is
+reported by name (in the console, and at the top of the Alerts window) and that entry is
+dropped; it does not stop the agent or the entries beside it.
+
 `mode` is `push`, `serve` or `both`. A corrupt or missing file falls back to
 defaults rather than refusing to start — a background agent that dies over a
 stray comma is worse than one that starts and says so in the tray.
@@ -131,6 +137,115 @@ elevated prompt:
 ```bash
 schtasks /create /tn PeekESP /sc onstart /ru SYSTEM /tr "\"C:\path\peek-agent.exe\" --config"
 ```
+
+## Alerts, extra sensors and messages
+
+The phone has notifications, quiet hours and alert rules of its own. This is what
+the **PC** adds, and all of it is in **Settings → Alerts, sensors and messages…**
+
+| Tab | What you set |
+|---|---|
+| **Alerts** | Whether rules run here; a Windows notification for each message; an alarm on this PC for critical ones; quiet hours (any window, which days, whether critical gets through); how long a message stays in the reading. |
+| **Rules** | A metric, *above / below / unusually high*, how long it must hold, a severity, optional wording of your own (`{machine} {label} {value} {limit} {duration}`), and an all-clear when it recovers. Seven are provided: CPU, memory, CPU temperature (critical), storage, battery low and critical (unplugged only), unusual network. |
+| **Sensors** | GPU, NPU, fans and power, plus your own. *Found right now* shows what is being read and from where. |
+| **Messages** | Send one to your phone, and the key and port for other programs. |
+
+**Rules run here, whether or not the phone is looking.** A spike at 3 a.m. is caught
+while the phone is asleep and waits in the next reading. The phone judges its own
+rules on whatever it last read. **Use one or the other for a given condition**: both
+trip, and you are told twice.
+
+**Offline and online is the phone's job.** A PC that has stopped cannot report that it
+stopped; the phone sees the relay go quiet and says so. What this app can tell you is
+that *this PC* cannot reach the relay, and when it can again. Those two notices appear
+on this PC only, never go to the phone (it is the one thing that cannot be told), and
+only for a failure to connect at all: a rejected token says so in the tray instead of
+sending you to check the router.
+
+**Quiet hours cover this PC, not the phone.** They silence this PC's notifications and
+alarm. Nothing is held back from the phone, which has quiet hours of its own, and a
+message dropped here would never reach its Alerts tab.
+
+A critical message **rings on this PC** too, until you choose **Silence alarm** in the
+tray menu or ten minutes pass. The tray menu's **Send test message** sends an info,
+warning or critical one through the whole path, to this PC and the phone.
+
+### Extra sensors
+
+Asked in this order, and the first to answer a reading wins it:
+
+1. **`nvidia-smi`**, if the NVIDIA driver is installed. GPU load, temperature, power,
+   memory and fan. With several cards: busiest, hottest, power and memory summed.
+2. **LibreHardwareMonitor's web server** (*Options → Remote Web Server → Run*, port
+   8085), which also gives AMD and Intel GPUs, CPU package power and fans.
+3. **Windows' own GPU performance counters**, which need nothing installed. The only
+   source that can see an NPU.
+
+| Reading | Key |
+|---|---|
+| GPU load, temperature | `gpu_percent`, `gpu_temp_c` |
+| NPU load | `npu_percent` |
+| GPU power, memory, fan | `gpu_power_w`, `gpu_mem_percent`, `vram_used_gb`, `gpu_fan_percent` / `gpu_fan_rpm` |
+| CPU package power, fastest case fan | `cpu_power_w`, `fan_rpm` |
+
+A source that finds nothing is asked less and less often, up to every five minutes, so
+a PC with no NVIDIA card is not launching `nvidia-smi` forever. A reading whose source
+goes quiet is dropped after a few intervals rather than left frozen on the dashboard.
+
+> **NPU is the least certain.** Windows has no NPU counter of its own: Task Manager
+> reads the GPU Engine counters and tells the adapters apart through DXCore, which a
+> stdlib agent cannot call. So an adapter whose only engines are compute or neural is
+> treated as the NPU, and an idle one has no instances at all, so it appears after the
+> first workload touches it. If your NPU never shows, or your GPU reads 0 while busy,
+> say so: it is a guess that has not met hardware.
+
+**Your own** go in `config.json` under `"sensors"`, or in the Sensors tab, which has a
+**Test** button that reads it once and shows the number or the reason it failed.
+
+```json
+"sensors": [
+  {"key": "ping_ms",  "label": "Ping", "unit": "ms", "source": "command",
+   "command": ["ping", "-n", "1", "1.1.1.1"], "regex": "time[=<](\\d+)ms"},
+  {"key": "solar_w",  "label": "Solar", "unit": "W", "max": 5000, "source": "file",
+   "path": "C:\\solar\\watts.txt"},
+  {"key": "inverter_w", "source": "http", "url": "http://127.0.0.1:8080/status",
+   "json_path": "data.power_w"},
+  {"key": "disk_queue", "label": "Disk queue", "source": "counter",
+   "counter": "\\PhysicalDisk(_Total)\\Current Disk Queue Length"}
+]
+```
+
+`command` runs **without a shell**, so nothing in it is interpreted. `counter` uses
+`typeperf`, and counter names are translated on non-English Windows. A reading with no
+number in it is reported as an error in the Sensors tab and left out of the reading.
+**Negative values are left out as well**, because the phone reads a negative as "this
+machine has no such sensor". At most 24 extras per reading are sent; your own come last.
+
+### Messages from other programs
+
+Anything on this PC can put a message in front of your phone: a security tool, a
+backup script, a scheduled task. Three routes, same fields, **[NOTIFY.md](NOTIFY.md)**
+has the details and examples:
+
+```
+peek-agent.exe notify --severity red --title "Intrusion" --message "New login from 203.0.113.9"
+```
+
+The **severity** decides what the phone does: `info` is quiet, `warning` uses the normal
+sound and a popup, `critical` (or `red`) rings like an alarm on the alarm volume, so on
+silent too, until silenced or ten minutes pass.
+
+Each message stays in every reading for six hours (set it in the Alerts tab). That is
+deliberate: a reading is the latest state, not a queue, and a phone looking every fifteen
+minutes with the app closed would otherwise miss one. The `id` makes the repeats count
+once. A message more than six hours old when the phone first sees it is filed quietly.
+
+**Two things to know about where messages travel:**
+
+* They go to your **relay** inside the reading, like everything else, and the relay
+  operator can read them. Do not put a password or a one-time code in one.
+* They are **left out of the LAN endpoint** (`serve` mode), which listens on every
+  interface with no password. Numbers are served there; messages are not.
 
 ## Build
 
@@ -194,6 +309,8 @@ next size up.
 | `net_rx_kbps` / `net_tx_kbps` | `GetIfTable`, deduplicated |
 | `cpu_temp_c` | LibreHardwareMonitor, else the thermal-zone perf counter, else WMI — see below |
 | `battery_*` | `GetSystemPowerStatus` |
+| `gpu_*`, `npu_percent`, `fan_rpm`, `cpu_power_w`, `vram_used_gb`, and your own | see *Extra sensors*, above. Sent as plain keys or a `metrics` object, whichever PROTOCOL.md says the phone reads |
+| `messages` | the outbox; see *Messages from other programs* |
 
 **Storage is every fixed disk.** `GetLogicalDrives` gives the mask,
 `GetDriveTypeW` filters it to `DRIVE_FIXED`, so removable, optical and mapped
@@ -206,7 +323,7 @@ and nothing in user space can get at that. The agent tries, best first:
 
 1. **[LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)**
    (or OpenHardwareMonitor) with its web server enabled — *Options → Remote Web
-   Server → Run*, port 8085. This is the only one that gives a real CPU
+   Server → Run*, port 8085 (the agent also tries 6596 and 6597). This is the only one that gives a real CPU
    temperature. The agent reads `/data.json` and prefers the CPU *package*
    sensor over the individual cores, since the package is what a thermal readout
    normally means.

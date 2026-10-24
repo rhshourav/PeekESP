@@ -16,6 +16,7 @@ Windows 10 rather than broken.
 
 import ctypes
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -23,10 +24,14 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 import peek_agent_win as agent
+import peek_alerts
+import peek_alerts_ui
 import peek_config as cfgmod
+import peek_services
 import peek_pair as pair
 import peek_remote as remote
 from peek_version import __version__ as APP_VERSION
@@ -86,6 +91,57 @@ def apply_glass(hwnd: int) -> bool:
 
 
 # ==========================================================================
+#  Ringing on this PC
+# ==========================================================================
+class Alarm:
+    """A two-tone alarm for a critical message, until silenced or ten minutes.
+
+    winsound.Beep plays through the default sound device on its own thread, so
+    it rings on a locked screen and does not need the settings window open. It
+    does not ring in a service in session 0, which has no audio - the headless
+    agent never uses this.
+    """
+    MAX_SECONDS = 600
+
+    def __init__(self):
+        self._stop = threading.Event()
+        self._thread = None
+        self._lock = threading.Lock()
+
+    @property
+    def ringing(self):
+        t = self._thread
+        return bool(t and t.is_alive() and not self._stop.is_set())
+
+    def ring(self):
+        with self._lock:
+            if self.ringing:
+                return
+            stop = self._stop = threading.Event()
+            self._thread = threading.Thread(target=self._run, args=(stop,), daemon=True)
+            self._thread.start()
+
+    def silence(self):
+        self._stop.set()
+
+    def _run(self, stop):
+        try:
+            import winsound
+        except ImportError:
+            return
+        end = time.time() + self.MAX_SECONDS
+        while not stop.is_set() and time.time() < end:
+            for freq in (880, 660):
+                if stop.is_set():
+                    break
+                try:
+                    winsound.Beep(freq, 300)
+                except RuntimeError:          # no usable sound device
+                    stop.wait(0.3)
+            stop.wait(0.4)
+
+
+# ==========================================================================
 #  Agent supervision
 # ==========================================================================
 class Runner:
@@ -102,9 +158,23 @@ class Runner:
         self._lock = threading.Lock()
         threading.Thread(target=agent._sampler, daemon=True).start()
 
+        # Sensors, rules and the message outbox. They outlive restart(): saving
+        # settings must not forget a message that is still inside its window.
+        self.services = peek_services.Services(
+            self.cfg, lambda: agent.snapshot(messages=False), socket.gethostname()[:19])
+        agent._services = self.services
+        self.services.outbox.on_new(self._on_message)
+        self.icon = None
+        self.alarm = Alarm()
+        self.toast_error = ""
+        self._link_lost = False
+
     # -- lifecycle ---------------------------------------------------------
     def start(self):
         self._stop.clear()
+        self.services.start()
+        for line in self.cfg.get("_warnings", []):
+            self.toast("PeekESP config", line)
         if self.cfg["mode"] in ("push", "both"):
             threading.Thread(target=self._push_forever, daemon=True).start()
         if self.cfg["mode"] in ("serve", "both"):
@@ -114,6 +184,7 @@ class Runner:
 
     def stop(self):
         self._stop.set()
+        self.services.stop()
         with self._lock:
             if self._httpd is not None:
                 try:
@@ -127,6 +198,7 @@ class Runner:
     def restart(self, cfg=None):
         if cfg is not None:
             self.cfg = cfgmod.validate(dict(cfg))
+        self.services.configure(self.cfg)
         self.stop()
         time.sleep(0.35)          # let the server socket close before rebinding
         self.start()
@@ -135,22 +207,72 @@ class Runner:
     def _set(self, status, detail):
         self.status, self.detail = status, detail
 
+    # -- notifications on this PC --------------------------------------------
+    def toast(self, title, body=""):
+        """A Windows notification from the tray icon. Best effort: it is the
+        least important thing this app does, so a failure is noted, not raised."""
+        icon = self.icon
+        if icon is None:
+            return
+        try:
+            icon.notify((body or " ")[:250], title[:60])
+        except Exception as e:
+            self.toast_error = repr(e)
+
+    def _on_message(self, msg):
+        """Every new message, whoever sent it: a rule, a security tool, a test."""
+        if time.time() - msg["ts"] > 6 * 3600:
+            return                       # old news: filed quietly, as the phone does
+        toast, ring = peek_alerts.local_policy(
+            msg["severity"], self.cfg["alerts"], datetime.now())
+        if toast:
+            head = ("CRITICAL: " if msg["severity"] == "critical" else "") + msg["title"]
+            tail = msg.get("body", "")
+            self.toast(head, (tail + "\n" if tail else "") + msg["source"])
+        if ring:
+            self.alarm.ring()
+
+    def _local_note(self, severity, title, body):
+        """A notice that is about this PC's own link, so it is shown here and
+        never sent to the phone - the phone is exactly what cannot be told."""
+        toast, _ring = peek_alerts.local_policy(severity, self.cfg["alerts"], datetime.now())
+        if toast:
+            self.toast(title, body)
+
     def _push_forever(self):
         problems = cfgmod.problems(self.cfg)
         if problems:
             self._set("not configured", "; ".join(problems))
             return
         url, token = self.cfg["relay_url"], self.cfg["token"]
-        fails = 0
+        fails, first_fail = 0, 0.0
         while not self._stop.is_set():
             code, msg = push_once(url, token)
             if code == 200:
                 fails = 0
                 self.last_ok = time.time()
                 self._set("pushing", "last push OK")
+                if self._link_lost:
+                    self._link_lost = False
+                    self._local_note("info", "PeekESP is back online",
+                                     "The relay is reachable again.")
             else:
-                fails += 1
                 self._set("error", msg)
+                # Only a failure to connect at all counts as the link being
+                # down. A 401 or 404 is a settings problem and says so in the
+                # tray; telling someone "offline" about it would send them to
+                # check the router.
+                if code == 0:
+                    if fails == 0:
+                        first_fail = time.time()
+                    fails += 1
+                    if fails >= 3 and time.time() - first_fail >= 30 and not self._link_lost:
+                        self._link_lost = True
+                        self._local_note("warning", "PeekESP cannot reach the relay",
+                                         "This PC has no route to the relay. Your phone will "
+                                         "see it as offline until it is back.")
+                else:
+                    fails = 0
             self._stop.wait(self.cfg["interval"])
 
     def _serve_forever(self):
@@ -591,11 +713,20 @@ def open_settings(runner):
                   relief="flat", bd=0, font=("Segoe UI", 8),
                   padx=10, pady=5, cursor="hand2").pack(side="left", padx=(0, 6))
 
-    tk.Checkbutton(body, text="Start automatically when I sign in",
+    auto_row = tk.Frame(body, bg=BG)
+    auto_row.pack(fill="x", pady=(14, 2))
+    tk.Checkbutton(auto_row, text="Start automatically when I sign in",
                    variable=v_auto, bg=BG, fg=TEXT, selectcolor=CARD,
                    activebackground=BG, activeforeground=CYAN,
                    font=("Segoe UI", 9), highlightthickness=0,
-                   bd=0).pack(anchor="w", pady=(14, 2))
+                   bd=0).pack(side="left")
+    tk.Button(auto_row, text="Alerts, sensors and messages...",
+              command=lambda: peek_alerts_ui.open_alerts(root, runner, {
+                  "BG": BG, "CARD": CARD, "EDGE": EDGE, "TEXT": TEXT, "DIM": DIM,
+                  "CYAN": CYAN, "RED": RED, "AMBER": AMBER, "GREEN": GREEN}),
+              bg=CARD, fg=TEXT, activebackground=EDGE, activeforeground=CYAN,
+              relief="flat", bd=0, font=("Segoe UI", 9), padx=12, pady=5,
+              cursor="hand2").pack(side="right")
 
     hint = label(body, f"config file: {cfgmod.config_path()}", DIM, 8)
     hint.pack(anchor="w", pady=(6, 0))
@@ -730,7 +861,6 @@ def main():
     from PIL import Image
 
     runner = Runner()
-    runner.start()
 
     try:
         image = Image.open(ICON)
@@ -765,20 +895,42 @@ def main():
         runner.restart(cfgmod.load())
 
     def quit_app(icon, item=None):
+        runner.alarm.silence()
         runner.stop()
         icon.stop()
+
+    def send_test(severity):
+        def go(icon=None, item=None):
+            runner.services.outbox.add({
+                "id": f"test-{int(time.time() * 1000)}", "severity": severity,
+                "title": f"Test {severity} message",
+                "body": f"Sent from PeekESP on {socket.gethostname()}.",
+                "source": "PeekESP test"}, internal=True)
+        return go
+
+    def silence(icon=None, item=None):
+        runner.alarm.silence()
 
     menu = pystray.Menu(
         pystray.MenuItem(status_text, None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Settings...", settings, default=True),
+        pystray.MenuItem("Silence alarm", silence,
+                         enabled=lambda item: runner.alarm.ringing),
+        pystray.MenuItem("Send test message", pystray.Menu(
+            pystray.MenuItem("Info", send_test("info")),
+            pystray.MenuItem("Warning", send_test("warning")),
+            pystray.MenuItem("Critical (rings)", send_test("critical")))),
         pystray.MenuItem("Reload config file", reload_cfg),
         pystray.MenuItem("Start / stop", toggle),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit", quit_app),
     )
 
-    pystray.Icon("PeekESP", image, "PeekESP agent", menu).run()
+    icon = pystray.Icon("PeekESP", image, "PeekESP agent", menu)
+    runner.icon = icon          # toasts are shown through the tray icon
+    runner.start()
+    icon.run()
 
 
 if __name__ == "__main__":

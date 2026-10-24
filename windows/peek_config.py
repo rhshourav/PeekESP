@@ -14,11 +14,26 @@ this, not a fallback.
       "serve_port": 6595,
       "autostart": false
     }
+
+The keys below are optional; leave them out and these defaults apply.
+
+    "sensors_enabled": true,      GPU, NPU, fans and power, when the PC has them
+    "extras_interval": 10.0,      seconds between those readings
+    "sensors": [ ... ],           your own, see windows/README.md
+    "alerts": { ... },            rules, quiet hours, local notifications
+    "message_ttl_hours": 6,       how long a message stays in every reading
+    "notify_enabled": true,       the 127.0.0.1 endpoint other programs can POST to
+    "notify_port": 6598,
+    "notify_key": ""              made for you the first time it is needed
 """
 
+import copy
 import json
 import os
 from pathlib import Path
+
+import peek_alerts
+import peek_sensors
 
 APP_NAME = "PeekESP"
 MODES = ("push", "serve", "both")
@@ -41,6 +56,15 @@ DEFAULTS = {
     "interval": 5.0,
     "serve_port": 6595,
     "autostart": False,
+    # --- sensors, alerts and messages --------------------------------------
+    "sensors_enabled": True,
+    "extras_interval": 10.0,
+    "sensors": [],
+    "alerts": peek_alerts.default_alerts(),
+    "message_ttl_hours": 6,
+    "notify_enabled": True,
+    "notify_port": 6598,
+    "notify_key": "",
 }
 
 
@@ -88,7 +112,7 @@ def load() -> dict:
     """Never raises: a corrupt or missing file falls back to defaults, because
     a background agent that refuses to start over a stray comma is worse than
     one that starts with sane settings and says so in the tray."""
-    cfg = dict(DEFAULTS)
+    cfg = copy.deepcopy(DEFAULTS)
     p = config_path()
     try:
         with open(p, "r", encoding="utf-8") as fh:
@@ -123,12 +147,45 @@ def validate(cfg: dict) -> dict:
     cfg["token"] = str(cfg.get("token", "") or "").strip()
     cfg["device_token"] = str(cfg.get("device_token", "") or "").strip()
     cfg["autostart"] = bool(cfg.get("autostart", False))
+
+    # Everything below is new and optional, and a hand-edited file will get it
+    # wrong. A bad entry is dropped with a reason in cfg["_warnings"] rather
+    # than stopping the agent or the entries beside it.
+    warns = []
+    cfg["sensors_enabled"] = bool(cfg.get("sensors_enabled", True))
+    try:
+        cfg["extras_interval"] = max(2.0, min(600.0, float(cfg.get("extras_interval", 10.0))))
+    except (TypeError, ValueError):
+        cfg["extras_interval"] = DEFAULTS["extras_interval"]
+    cfg["sensors"], w = peek_sensors.clean_custom(cfg.get("sensors"))
+    warns += w
+    cfg["alerts"], w = peek_alerts.clean_alerts(cfg.get("alerts"))
+    warns += w
+    try:
+        cfg["message_ttl_hours"] = max(1.0, min(72.0, float(cfg.get("message_ttl_hours", 6))))
+    except (TypeError, ValueError):
+        cfg["message_ttl_hours"] = DEFAULTS["message_ttl_hours"]
+    cfg["notify_enabled"] = bool(cfg.get("notify_enabled", True))
+    try:
+        port = int(cfg.get("notify_port", 6598))
+        if 1024 <= port <= 65535 and port != cfg["serve_port"]:
+            cfg["notify_port"] = port
+        else:
+            cfg["notify_port"] = DEFAULTS["notify_port"]
+            warns.append(f"notify port {port} is not usable (1024-65535, and not the "
+                         f"serve port); using {DEFAULTS['notify_port']}")
+    except (TypeError, ValueError):
+        cfg["notify_port"] = DEFAULTS["notify_port"]
+        warns.append(f"notify port must be a number; using {DEFAULTS['notify_port']}")
+    cfg["notify_key"] = str(cfg.get("notify_key", "") or "").strip()
+    cfg["_warnings"] = warns
     return cfg
 
 
 def save(cfg: dict) -> Path:
     cfg = validate(dict(cfg))
     cfg.pop("_error", None)
+    cfg.pop("_warnings", None)
     d = config_dir()
     d.mkdir(parents=True, exist_ok=True)
     p = config_path()
