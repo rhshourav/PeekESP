@@ -1,0 +1,26 @@
+# Test the relay on every change to it.
+#
+# This is not just hygiene: render.yaml sets autoDeployTrigger: checksPass, so
+# Render waits for this run to go green before deploying. A red run means the
+# live relay is left exactly as it was.
+#
+# Lives at .github/workflows/relay.yml at the REPOSITORY ROOT; the relay is
+# expected in a directory called relay/.
+name: relay
+
+on:
+  push:
+    paths: ["relay/**", ".github/workflows/relay.yml"]
+  pull_request:
+    paths: ["relay/**", ".github/workflows/relay.yml"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: relay } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm test

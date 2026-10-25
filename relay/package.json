@@ -1,0 +1,13 @@
+{
+  "name": "peek-relay",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PeekESP relay - a small HTTPS service, deployed on Render, so the dashboard works without an inbound port",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node test/worker.test.mjs && node test/server.test.mjs",
+    "mint": "node mint.mjs"
+  }
+}

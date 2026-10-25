@@ -1,0 +1,47 @@
+# PeekESP relay on Render's free instance type.
+#
+# Must sit at the ROOT of the Git repository. The relay itself lives in relay/.
+# Deploy: push this repo to GitHub, then either use the "Deploy to Render"
+# button in relay/README.md, or New -> Blueprint -> paste the repo URL.
+#
+# Check it any time with the Render CLI:   render blueprints validate
+services:
+  - type: web
+    name: peek-relay            # a taken name gets a suffix; the real URL is in the dashboard
+    runtime: node
+    plan: free
+    region: singapore           # closest to Dhaka
+    rootDir: relay
+    buildCommand: npm install   # there are no dependencies; this is instant
+    startCommand: npm start
+    healthCheckPath: /health
+
+    # Every deploy RESTARTS the process, and a restart forgets the in-memory
+    # claims on a host with no disk. So deploy rarely and only when it is safe:
+    #
+    #  * checksPass - wait for the GitHub Actions run to go green, so a broken
+    #    commit never replaces a working relay. (If you disable Actions, Render
+    #    would wait forever: change this to `commit`.)
+    #  * rootDir already makes Render ignore commits outside relay/, so firmware
+    #    commits never redeploy it. buildFilter goes one step further and ignores
+    #    files inside relay/ that are not part of what runs.
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths:
+        - relay/**
+      ignoredPaths:
+        - relay/test/**
+        - relay/README.md
+        - relay/mint.mjs
+        - relay/live_pair.py
+
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Not set here on purpose - add these in the dashboard (Environment):
+      #   PRECLAIMED     from `node mint.mjs --preclaim <code>`  (recommended)
+      #   MASTER_SECRET  only if you want named streams
+      # A `sync: false` entry would make the first deploy stop and ask for a
+      # value, which is the wrong first impression for something optional.
+      # There is no DATA_DIR: a free instance has no disk to put it on.
+      # PORT is set by Render (default 10000); the server reads it.
