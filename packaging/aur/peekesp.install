@@ -4,10 +4,18 @@
 
 _user=peekesp
 
-post_install() {
+# --user-group, not left to the distribution's default. The service's files are
+# now group-owned (alerts.json, the outbox folder, the endpoint's key), and the
+# group is how a non-root user is allowed to send a message, so it has to exist
+# under the same name whatever USERGROUPS_ENAB says.
+_ensure_user() {
     if ! id "$_user" >/dev/null 2>&1; then
-        useradd --system --no-create-home --shell /usr/bin/nologin "$_user"
+        useradd --system --user-group --no-create-home --shell /usr/bin/nologin "$_user"
     fi
+}
+
+post_install() {
+    _ensure_user
     cat <<'MSG'
 
 PeekESP is installed but not paired. The device shows a code on its screen:
@@ -18,16 +26,44 @@ PeekESP is installed but not paired. The device shows a code on its screen:
 Then `peekesp status` says whether it is actually pushing, which is not the
 same question as whether the service is running.
 
+It can also read GPU, NPU and fan sensors, run alert rules, and carry messages
+to your phone: see `peekesp sensors`, `peekesp rules` and `peekesp notify`.
+
 MSG
 }
 
 post_upgrade() {
-    post_install
+    _ensure_user
+    # Not post_install: that tells someone who paired months ago that the
+    # package is not paired. What an upgrade does need to say is that the running
+    # service is still the old agent, with the old unit, until it is restarted.
+    cat <<'MSG'
+
+PeekESP was upgraded. The running service is still the previous version:
+
+    sudo systemctl restart peek-agent
+
+This release can read GPU, NPU and fan sensors, run alert rules, and carry
+messages to your phone. `peekesp status` says afterwards if anything is only
+half set up.
+
+MSG
 }
 
 post_remove() {
     # The account goes; /etc/peekesp/agent.conf does not, because it holds the
     # pairing code and pacman treats it as a backup file. Removing it here
-    # would delete a credential the user may still want on reinstall.
+    # would delete a credential the user may still want on reinstall. For the
+    # same reason /etc/peekesp/alerts.json stays: it is the person's own rules.
+    #
+    # What does go is the state directory. pacman does not own it (systemd made
+    # it at runtime), and left behind it would be owned by a user id that no
+    # longer exists. It holds only the outbox, the history and the endpoint's key,
+    # all made again on the next start.
+    rm -rf /var/lib/peekesp
+    # A drop-in that `peekesp repair` may have added before this unit carried
+    # the state directory itself.
+    rm -f /etc/systemd/system/peek-agent.service.d/state.conf
+    rmdir /etc/systemd/system/peek-agent.service.d 2>/dev/null || true
     userdel "$_user" 2>/dev/null || true
 }
