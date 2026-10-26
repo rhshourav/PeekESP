@@ -55,8 +55,9 @@ if [ "${1:-}" = "--uninstall" ]; then
     step "Removing the PeekESP agent"
     systemctl disable --now peek-agent.service 2>/dev/null || true
     rm -f "$UNIT"
+    rm -rf /etc/systemd/system/peek-agent.service.d
     systemctl daemon-reload
-    rm -rf "$PREFIX" "$CONF_DIR"
+    rm -rf "$PREFIX" "$CONF_DIR" /var/lib/peekesp
     rm -f "$CLI"
     userdel "$SVC_USER" 2>/dev/null || true
     say "Removed. The relay keeps this machine's last reading for 24 hours,"
@@ -68,9 +69,11 @@ PY=$(command -v python3 || true)
 [ -n "$PY" ] || die "python3 is not installed.  sudo apt install -y python3"
 
 # The agent is standard library only, so this is the interpreter version and
-# nothing else. f-strings and secrets are not used; 3.6 is genuinely enough.
-"$PY" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 6) else 1)' \
-    || die "python3 is older than 3.6"
+# nothing else. 3.7 is the floor: the agent serves with ThreadingHTTPServer,
+# which arrived in 3.7, so a 3.6 machine would pass a looser check here and then
+# fail to start.
+"$PY" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 7) else 1)' \
+    || die "python3 is older than 3.7  (Debian 10 / Ubuntu 20.04 or newer)"
 
 if command -v curl >/dev/null 2>&1; then
     fetch() { curl -fsSL --proto '=https' --tlsv1.2 "$1" -o "$2"; }
@@ -146,6 +149,10 @@ step "Storing the pairing code"
 # dropping to the service account.
 mkdir -p "$CONF_DIR"
 chmod 0750 "$CONF_DIR"
+# The service reads alerts.json from here (rules, quiet hours, sensors), so the
+# directory is readable by its group. agent.conf stays 0600 root: the pairing
+# code is the credential, and the group cannot read it.
+chgrp "$SVC_USER" "$CONF_DIR" 2>/dev/null || true
 umask 077
 cat > "$CONF" <<EOF
 # PeekESP agent configuration.  Edit with:  sudo peekesp set KEY VALUE
@@ -207,6 +214,12 @@ LockPersonality=true
 SystemCallArchitectures=native
 PrivateTmp=true
 
+# The one place the service may write: the outbox of messages waiting for the
+# phone, the history that "unusually high" is judged against, and the key for
+# the local endpoint. systemd creates it, owned by the service account.
+StateDirectory=peekesp
+StateDirectoryMode=0750
+
 # ProtectHome is deliberately NOT set. It replaces /home with an empty mount,
 # and this agent adds up every real filesystem to report storage - so a machine
 # with /home on its own partition would silently stop counting it and report
@@ -264,6 +277,16 @@ Everything is managed with the peekesp command:
   sudo peekesp set interval 15
   sudo peekesp uninstall
   peekesp help                the rest
+
+It can also read more than the basics, and carry messages to your phone:
+
+  peekesp sensors             GPU, NPU, fans, disk temperature - what it found
+  peekesp rules               alert rules that run on this machine (7 to start)
+  sudo peekesp quiet 22:00 07:00
+  peekesp notify --severity red --title "Intrusion" --message "New login"
+
+  Other users may run 'notify' without sudo once they are in the service
+  group:  sudo usermod -aG peekesp USER   (then log in again)
 
 The device should show this machine within a few seconds. Run the same
 installer on other machines with the SAME code and they all appear on the one

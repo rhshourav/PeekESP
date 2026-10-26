@@ -12,8 +12,12 @@
 #   peekesp set KEY VALUE       interval | relay | serve
 #   peekesp cmd VERB [N]        tell the display: reboot, standby, wake,
 #                               refresh, identify, page N, bright N
+#   peekesp notify ...          leave a message for your phone
+#   peekesp rules | quiet | hook | sensors | alerts
+#                               alert rules, quiet hours, extra sensors
 #   peekesp check               is a newer release out
 #   peekesp update              fetch the latest agent and restart
+#   peekesp repair              re-apply the service settings, no download
 #   peekesp uninstall
 #   peekesp version
 #
@@ -40,8 +44,13 @@ SVC="peek-agent.service"
 SVC_USER="peekesp"
 AGENT="$PREFIX/peek-agent.py"
 SELF="/usr/local/bin/peekesp"
+STATE_DIR="/var/lib/peekesp"
+ALERTS="$CONF_DIR/alerts.json"
+DROPIN_DIR="/etc/systemd/system/peek-agent.service.d"
 
 say()  { printf '%s\n' "$*"; }
+# The new features are on unless switched off, so unset reads as on.
+flag() { case "${1:-}" in 0|off|no|false) echo off ;; *) echo on ;; esac; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 need_root() {
@@ -78,6 +87,37 @@ conf_set() {
     chown root:root "$CONF" 2>/dev/null || true
 }
 
+# The agent now keeps an outbox, a history and a key, and a unit written before
+# that has a read-only /var and nowhere to put them. This adds the one setting
+# that fixes it, as a drop-in rather than an edit, so it works the same on a
+# unit this installer wrote and on one a package shipped, and an update of
+# either leaves it alone. It also lets the service read alerts.json: the config
+# directory becomes group-readable, but agent.conf - the credential - stays 0600.
+repair_install() {
+    if command -v systemctl >/dev/null 2>&1; then
+        if ! systemctl cat "$SVC" 2>/dev/null | grep -q '^StateDirectory='; then
+            mkdir -p "$DROPIN_DIR"
+            printf '[Service]\nStateDirectory=peekesp\nStateDirectoryMode=0750\n' \
+                > "$DROPIN_DIR/state.conf"
+            chmod 0644 "$DROPIN_DIR/state.conf"
+            systemctl daemon-reload 2>/dev/null || true
+            say "gave the service a state directory ($STATE_DIR)"
+        fi
+    fi
+    if [ -d "$CONF_DIR" ] && getent group "$SVC_USER" >/dev/null 2>&1; then
+        chgrp "$SVC_USER" "$CONF_DIR" 2>/dev/null && chmod 0750 "$CONF_DIR" || true
+        # The credential stays root-only whatever the directory allows.
+        if [ -f "$CONF" ]; then
+            chmod 0600 "$CONF" 2>/dev/null || true
+            chown root:root "$CONF" 2>/dev/null || true
+        fi
+        if [ -f "$ALERTS" ]; then
+            chgrp "$SVC_USER" "$ALERTS" 2>/dev/null && chmod 0640 "$ALERTS" || true
+        fi
+    fi
+    return 0
+}
+
 restart_if_running() {
     if systemctl is-enabled --quiet "$SVC" 2>/dev/null \
        || systemctl is-active --quiet "$SVC" 2>/dev/null; then
@@ -101,13 +141,32 @@ peekesp - control the PeekESP telemetry agent
 
   sudo peekesp pair CODE      re-pair to a different device
   peekesp config              current settings
-  sudo peekesp set KEY VALUE  interval SECONDS | relay URL | serve on|off
+  sudo peekesp set KEY VALUE  interval SECONDS | relay URL | serve on|off |
+                              alerts on|off | sensors on|off | notify on|off |
+                              notify-port N | ttl HOURS | extras-interval SECONDS
   sudo peekesp cmd VERB [N]   tell the display: reboot | standby | wake |
                               refresh | identify | page N | bright 0-3
   peekesp check               is a newer release out
   sudo peekesp update         fetch the latest agent and restart
+  sudo peekesp repair         re-apply the service settings, no download
   sudo peekesp uninstall      remove the service, the files and the account
   peekesp version
+
+Messages, rules and sensors:
+
+  peekesp notify --severity red --title "..." [--message "..."]
+                              put a message in front of your phone. Any
+                              member of the peekesp group may; no sudo
+  peekesp rules               the alert rules that run on this machine
+  sudo peekesp rules add METRIC above|below|unusual LIMIT [--for SECONDS]
+                              [--severity S] | on ID | off ID | rm ID | reset
+  peekesp quiet               quiet hours for the hook
+  sudo peekesp quiet 22:00 07:00 [--days weekdays] | off
+  peekesp hook                a command run for every new message
+  sudo peekesp hook set [--min warning] /path/to/program [args] | off
+  peekesp sensors             what is being read now: GPU, NPU, fans, your own
+  sudo peekesp sensors add KEY file|command|http TARGET | rm KEY | test KEY
+  peekesp alerts              a summary; `alerts edit` opens the file
 
 Anything that changes state needs root. The pairing code is the credential,
 so reading the config does too.
@@ -156,6 +215,17 @@ status)
     elif journalctl -u "$SVC" -n 200 --no-pager 2>/dev/null | grep -q 'pushing to'; then
         say ""
         say "pushing normally"
+    fi
+
+    # What the agent adds beyond the standard reading, and the two ways it can
+    # be quietly half-working: a unit with no state directory (messages would
+    # not survive a restart and the local endpoint is off), and an unreadable
+    # alerts.json (the rules would be the defaults, not yours).
+    say ""
+    python3 "$AGENT" alerts 2>/dev/null | sed 's/^/  /' || true
+    if journalctl -u "$SVC" -n 200 --no-pager 2>/dev/null | grep -q 'no writable state directory'; then
+        say "  messages  NOT persisted, and the local endpoint is off"
+        say "            fix with:  sudo peekesp repair"
     fi
     ;;
 
@@ -211,9 +281,13 @@ config)
     say "pair code   ${PEEK_PAIR_CODE:-(unset)}"
     say "relay       ${PEEK_RELAY_BASE:-https://peek-relay.peekesp.workers.dev}"
     say "interval    ${PEEK_INTERVAL:-5}s"
-    say "serve       $([ "${PEEK_SERVE:-0}" = "1" ] && echo 'yes, on :8080' || echo no)"
+    say "serve       $([ "${PEEK_SERVE:-0}" = "1" ] && echo 'yes, on :6595' || echo no)"
+    say "alerts      $(flag "${PEEK_ALERTS:-}")    sensors $(flag "${PEEK_SENSORS:-}") every ${PEEK_EXTRAS_INTERVAL:-10}s"
+    say "messages    kept ${PEEK_MESSAGE_TTL_HOURS:-6}h; local endpoint $(flag "${PEEK_NOTIFY:-}") (127.0.0.1:${PEEK_NOTIFY_PORT:-6598})"
     say ""
     say "file        $CONF"
+    say "rules       $ALERTS"
+    say "state       $STATE_DIR"
     say "agent       $AGENT"
     ;;
 
@@ -223,7 +297,13 @@ set)
     [ $# -ge 2 ] || die "usage: sudo peekesp set KEY VALUE
        interval SECONDS   how often to push (5 is the default)
        relay    URL       a different Worker
-       serve    on|off    also answer on :8080, for a device on the same LAN"
+       serve    on|off    also answer on :6595, for a device on the same LAN
+       alerts   on|off    run the alert rules on this machine
+       sensors  on|off    report GPU, NPU, fans and disk temperature
+       notify   on|off    the 127.0.0.1 endpoint other programs can POST to
+       notify-port N      its port (6598)
+       ttl HOURS          how long a message stays in every reading (6)
+       extras-interval S  seconds between sensor reads (10)"
     case "$1" in
         interval)
             case "$2" in
@@ -244,13 +324,45 @@ set)
             ;;
         serve)
             case "$2" in
-                on|yes|1|true)  conf_set PEEK_SERVE 1; say "serving on :8080 as well" ;;
+                on|yes|1|true)  conf_set PEEK_SERVE 1; say "serving on :6595 as well" ;;
                 off|no|0|false) conf_set PEEK_SERVE 0; say "pushing only" ;;
                 *) die "serve is on or off" ;;
             esac
             ;;
+        alerts|sensors|notify)
+            _var=PEEK_$(printf '%s' "$1" | tr 'a-z' 'A-Z')
+            case "$2" in
+                on|yes|1|true)  conf_set "$_var" 1; say "$1 on" ;;
+                off|no|0|false) conf_set "$_var" 0; say "$1 off" ;;
+                *) die "$1 is on or off" ;;
+            esac
+            ;;
+        notify-port)
+            case "$2" in
+                ''|*[!0-9]*) die "the port must be a number" ;;
+            esac
+            [ "$2" -ge 1024 ] && [ "$2" -le 65535 ] || die "the port must be 1024-65535"
+            conf_set PEEK_NOTIFY_PORT "$2"
+            say "local endpoint on 127.0.0.1:$2"
+            ;;
+        ttl)
+            case "$2" in
+                ''|*[!0-9]*) die "ttl is a whole number of hours, 1-72" ;;
+            esac
+            [ "$2" -ge 1 ] && [ "$2" -le 72 ] || die "ttl is 1-72 hours"
+            conf_set PEEK_MESSAGE_TTL_HOURS "$2"
+            say "messages stay in every reading for $2 hours"
+            ;;
+        extras-interval)
+            case "$2" in
+                ''|*[!0-9]*) die "extras-interval is a whole number of seconds, 2-600" ;;
+            esac
+            [ "$2" -ge 2 ] && [ "$2" -le 600 ] || die "extras-interval is 2-600 seconds"
+            conf_set PEEK_EXTRAS_INTERVAL "$2"
+            say "sensors are read every ${2}s"
+            ;;
         *)
-            die "unknown setting '$1' - try interval, relay or serve"
+            die "unknown setting '$1' - try interval, relay, serve, alerts, sensors, notify, notify-port, ttl or extras-interval"
             ;;
     esac
     restart_if_running
@@ -292,7 +404,20 @@ update)
     sh -n "$SELF.new" && mv "$SELF.new" "$SELF" && chmod 0755 "$SELF" \
         || { rm -f "$SELF.new"; say "(kept the existing peekesp command)"; }
 
+    # A new agent may need the service set up differently than the one it
+    # replaces. Done here so `peekesp update` is the whole upgrade.
+    repair_install
     say "updated"
+    restart_if_running
+    ;;
+
+repair)
+    installed
+    need_root repair
+    # No download. For a unit or config directory written before the agent kept
+    # any state, and for a packaged install whose unit this installer never saw.
+    repair_install
+    say "ok"
     restart_if_running
     ;;
 
@@ -305,8 +430,9 @@ uninstall)
     fi
     systemctl disable --now "$SVC" 2>/dev/null || true
     rm -f "$UNIT"
+    rm -rf "$DROPIN_DIR"
     systemctl daemon-reload 2>/dev/null || true
-    rm -rf "$PREFIX" "$CONF_DIR"
+    rm -rf "$PREFIX" "$CONF_DIR" "$STATE_DIR"
     userdel "$SVC_USER" 2>/dev/null || true
     rm -f "$SELF"
     say "Removed. The relay keeps this machine's last reading for 24 hours,"
@@ -336,6 +462,33 @@ cmd|command)
     python3 "$AGENT" --pair-code "$PEEK_PAIR_CODE" \
         --relay-base "${PEEK_RELAY_BASE:-https://peek-relay.peekesp.workers.dev}" \
         --command "$@"
+    ;;
+
+notify|rules|quiet|hook|sensors)
+    installed
+    # The agent does the work, so the rules for what is valid live in one place.
+    # Reading needs read access to alerts.json (root, or the service group);
+    # writing needs root. The agent says which when it cannot.
+    exec python3 "$AGENT" "$cmd" "$@"
+    ;;
+
+alerts)
+    installed
+    if [ "${1:-}" = "edit" ]; then
+        need_root alerts edit
+        # Start from the defaults if there is no file, so there is something to
+        # change; check afterwards, so a typo is found now and not at 3 a.m.
+        python3 "$AGENT" alerts init
+        ${VISUAL:-${EDITOR:-$(command -v nano || command -v vi)}} "$ALERTS"
+        if python3 "$AGENT" alerts check; then
+            say "the agent picks this up within 5 seconds"
+        else
+            say "fix the problems above and run  sudo peekesp alerts edit  again"
+            exit 1
+        fi
+    else
+        exec python3 "$AGENT" alerts "$@"
+    fi
     ;;
 
 check)
