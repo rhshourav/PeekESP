@@ -13,6 +13,7 @@ Peek Essential Status Panel
 ![license](https://img.shields.io/badge/license-MIT-5C6B82?style=flat-square)
 ![worker CI](https://img.shields.io/github/actions/workflow/status/rhshourav/PeekESP/cloudflare-worker.yml?style=flat-square&label=worker%20CI)
 ![release](https://img.shields.io/github/v/release/rhshourav/PeekESP?style=flat-square&color=8CC63F)
+[![Listed on ESP32 Gallery](https://esp32gallery.com/badge.svg)](https://esp32gallery.com/projects/rhshourav-peekesp/)
 
 <img src="img/dashboard.jpeg" alt="PeekESP running on a TTGO T-Display, showing CPU, RAM, storage and network for a machine called Cryo-PC" width="720">
 
