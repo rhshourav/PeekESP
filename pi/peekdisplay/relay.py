@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from .pairing import derive
 
-DEFAULT_RELAY = "https://peek-relay.peekesp.workers.dev"
+DEFAULT_RELAY = "https://peek-relay-b9a8.onrender.com"
 USER_AGENT = "PeekESP-pi/1.0"
 TIMEOUT = 15
 

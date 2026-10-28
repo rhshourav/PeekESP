@@ -36,7 +36,7 @@ put in the wrong one.
 
 | Name | Required | Value |
 |---|---|---|
-| `WORKER_URL` | No, but the weekly health check silently does nothing without it | `https://peek-relay.peekesp.workers.dev` |
+| `WORKER_URL` | No, but the weekly health check silently does nothing without it | `https://peek-relay-b9a8.onrender.com` |
 
 **Base URL only** — no path, no trailing slash needed. The workflow appends
 `/health` itself. Putting `/telemetry` here makes the health check request
@@ -65,7 +65,7 @@ read token = HMAC-SHA256(MASTER_SECRET, "<stream>:read")  first 48 hex chars
 Nothing is stored, so onboarding is offline — the deployment is never touched:
 
 ```bash
-MASTER_SECRET=... npm run mint -- alice --url https://peek-relay.peekesp.workers.dev
+MASTER_SECRET=... npm run mint -- alice --url https://peek-relay-b9a8.onrender.com
 ```
 
 It prints that stream's two tokens plus the exact agent command and portal
@@ -137,20 +137,20 @@ change here.
 temperature without a vendor driver.
 
 ```bash
-python3 peek-agent.py --push https://peek-relay.peekesp.workers.dev/ingest --token PUSH_TOKEN_HERE
+python3 peek-agent.py --push https://peek-relay-b9a8.onrender.com/ingest --token PUSH_TOKEN_HERE
 ```
 
 Shared mode — note the stream name on the end:
 
 ```bash
-python3 peek-agent.py --push https://peek-relay.peekesp.workers.dev/ingest/alice --token ALICE_PUSH_TOKEN
+python3 peek-agent.py --push https://peek-relay-b9a8.onrender.com/ingest/alice --token ALICE_PUSH_TOKEN
 ```
 
 Or keep the token out of your shell history:
 
 ```bash
 export PEEK_PUSH_TOKEN=...
-python3 peek-agent.py --push https://peek-relay.peekesp.workers.dev/ingest
+python3 peek-agent.py --push https://peek-relay-b9a8.onrender.com/ingest
 ```
 
 Add `--no-serve` if you do not also want the local `:6595` endpoint.
@@ -163,7 +163,7 @@ This trips people up, because all three look like "the Worker URL":
 
 | Used by | URL |
 |---|---|
-| GitHub `WORKER_URL` variable | `https://peek-relay.peekesp.workers.dev` |
+| GitHub `WORKER_URL` variable | `https://peek-relay-b9a8.onrender.com` |
 | ESP32 setup portal | `…`**`/telemetry`** or `…`**`/telemetry/<stream>`** |
 | Host agent `--push` | `…`**`/ingest`** or `…`**`/ingest/<stream>`** |
 

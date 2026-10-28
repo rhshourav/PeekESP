@@ -126,7 +126,7 @@
 // Where a freshly flashed device looks unless told otherwise. Change this if
 // you deploy your own Worker - see cloudflare/ in the repository.
 #ifndef RELAY_BASE_URL
-  #define RELAY_BASE_URL "https://peek-relay.peekesp.workers.dev"
+  #define RELAY_BASE_URL "https://peek-relay-b9a8.onrender.com"
 #endif
 
 // 32 characters with I, O, 0 and 1 removed - the pairs people mistype reading

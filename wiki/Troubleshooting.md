@@ -116,7 +116,7 @@ handshake without saying why.
 Cloudflare rotated to a CA not pinned in `ca_certs.h`. Confirm with:
 
 ```bash
-openssl s_client -connect peek-relay.peekesp.workers.dev:443 -showcerts </dev/null
+openssl s_client -connect peek-relay-b9a8.onrender.com:443 -showcerts </dev/null
 ```
 
 Add the new root to `ca_certs.h`. The portal's **Verify TLS certificate** switch

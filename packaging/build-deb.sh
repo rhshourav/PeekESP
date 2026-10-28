@@ -64,7 +64,7 @@ cat > "$STAGE/etc/peekesp/agent.conf" <<'EOF'
 # to your device. Set it with:  sudo peekesp pair YOUR-CODE
 PEEK_PAIR_CODE=
 PEEK_INTERVAL=5
-PEEK_RELAY_BASE=https://peek-relay.peekesp.workers.dev
+PEEK_RELAY_BASE=https://peek-relay-b9a8.onrender.com
 PEEK_SERVE=0
 EOF
 chmod 600 "$STAGE/etc/peekesp/agent.conf"

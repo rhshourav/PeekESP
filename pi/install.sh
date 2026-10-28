@@ -177,7 +177,7 @@ if [ ! -f "$CONF" ]; then
 # The pairing code is the credential: the stream and both tokens derive from
 # it, so anything that can read this file can push telemetry to your display.
 PEEK_PAIR_CODE=$CODE
-PEEK_RELAY_BASE=https://peek-relay.peekesp.workers.dev
+PEEK_RELAY_BASE=https://peek-relay-b9a8.onrender.com
 
 PEEK_PANEL=$PANEL
 PEEK_INTERVAL=5

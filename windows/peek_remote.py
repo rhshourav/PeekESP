@@ -144,7 +144,7 @@ if __name__ == "__main__":
     if len(sys.argv) >= 3:
         print(send_command(
             sys.argv[1] if sys.argv[1].startswith("http")
-            else "https://peek-relay.peekesp.workers.dev",
+            else "https://peek-relay-b9a8.onrender.com",
             sys.argv[-2], sys.argv[-1]))
     else:
         u = UpdateCheck("0.0.0")

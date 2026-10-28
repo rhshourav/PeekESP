@@ -56,7 +56,7 @@ USER_AGENT = "PeekESP-agent/1.0 (+https://github.com/rhshourav/PeekESP)"
 
 # The same relay the firmware ships pointing at, so a pairing code alone is
 # enough on both sides and there is no URL to copy anywhere.
-RELAY_BASE = "https://peek-relay.peekesp.workers.dev"
+RELAY_BASE = "https://peek-relay-b9a8.onrender.com"
 
 # Kept in step with the VERSION file by tools/bump_version.py, which CI runs
 # with --check. Before this the Linux agent carried no version at all, so

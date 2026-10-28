@@ -197,7 +197,7 @@ status)
         . "$CONF"
         say "machine   $(hostname)"
         say "interval  ${PEEK_INTERVAL:-5}s"
-        say "relay     ${PEEK_RELAY_BASE:-https://peek-relay.peekesp.workers.dev}"
+        say "relay     ${PEEK_RELAY_BASE:-https://peek-relay-b9a8.onrender.com}"
         if [ -n "${PEEK_PAIR_CODE:-}" ]; then
             say "stream    $(python3 "$AGENT" --pair-code "$PEEK_PAIR_CODE" --verify 2>/dev/null || echo '?')"
         fi
@@ -279,7 +279,7 @@ config)
     installed
     load_conf
     say "pair code   ${PEEK_PAIR_CODE:-(unset)}"
-    say "relay       ${PEEK_RELAY_BASE:-https://peek-relay.peekesp.workers.dev}"
+    say "relay       ${PEEK_RELAY_BASE:-https://peek-relay-b9a8.onrender.com}"
     say "interval    ${PEEK_INTERVAL:-5}s"
     say "serve       $([ "${PEEK_SERVE:-0}" = "1" ] && echo 'yes, on :6595' || echo no)"
     say "alerts      $(flag "${PEEK_ALERTS:-}")    sensors $(flag "${PEEK_SENSORS:-}") every ${PEEK_EXTRAS_INTERVAL:-10}s"
@@ -460,7 +460,7 @@ cmd|command)
     [ -n "${PEEK_PAIR_CODE:-}" ] || die "no pairing code in $CONF - set one with:
        sudo peekesp pair YOUR-CODE"
     python3 "$AGENT" --pair-code "$PEEK_PAIR_CODE" \
-        --relay-base "${PEEK_RELAY_BASE:-https://peek-relay.peekesp.workers.dev}" \
+        --relay-base "${PEEK_RELAY_BASE:-https://peek-relay-b9a8.onrender.com}" \
         --command "$@"
     ;;
 

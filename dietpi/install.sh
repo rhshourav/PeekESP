@@ -168,7 +168,7 @@ PEEK_PAIR_CODE=$CODE
 PEEK_INTERVAL=5
 
 # A different Worker, if you deployed your own.
-PEEK_RELAY_BASE=https://peek-relay.peekesp.workers.dev
+PEEK_RELAY_BASE=https://peek-relay-b9a8.onrender.com
 
 # Also answer on :6595, for a device polling over the same LAN. Off by
 # default: an open port is not something pushing telemetry should imply.

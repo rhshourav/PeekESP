@@ -41,7 +41,7 @@ MODES = ("push", "serve", "both")
 # Where a device looks unless told otherwise. Must match RELAY_BASE_URL in the
 # firmware, or a paired device and this app would derive the same stream but
 # look for it on two different relays.
-DEFAULT_RELAY_BASE = "https://peek-relay.peekesp.workers.dev"
+DEFAULT_RELAY_BASE = "https://peek-relay-b9a8.onrender.com"
 
 DEFAULTS = {
     "mode": "push",

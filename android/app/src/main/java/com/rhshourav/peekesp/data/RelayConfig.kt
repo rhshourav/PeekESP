@@ -11,7 +11,7 @@ import java.net.URISyntaxException
  * Agents and devices must push to the same relay the app reads from.
  */
 object RelayConfig {
-    const val DEFAULT_BASE = "https://peek-relay.peekesp.workers.dev"
+    const val DEFAULT_BASE = "https://peek-relay-b9a8.onrender.com"
 
     // Spelling is historical. Kept so an address saved by an earlier build survives an update.
     private const val KEY = "realy_url"

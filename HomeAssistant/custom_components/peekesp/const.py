@@ -3,7 +3,7 @@
 DOMAIN = "peekesp"
 
 # Where a freshly flashed device looks unless told otherwise (PeekESP.ino).
-DEFAULT_RELAY_BASE = "https://peek-relay.peekesp.workers.dev"
+DEFAULT_RELAY_BASE = "https://peek-relay-b9a8.onrender.com"
 
 CONF_URL = "url"
 CONF_TOKEN = "token"

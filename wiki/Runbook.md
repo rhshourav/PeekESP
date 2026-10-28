@@ -11,7 +11,7 @@ Values referenced here are defined in
 ### 1. Worker deployed
 
 ```bash
-curl https://peek-relay.peekesp.workers.dev/health
+curl https://peek-relay-b9a8.onrender.com/health
 ```
 
 | Response | Meaning |
@@ -29,7 +29,7 @@ until `configured` is `true`.
 ### 2. Auth works
 
 ```bash
-curl -H "Authorization: Bearer READ_TOKEN_HERE" https://peek-relay.peekesp.workers.dev/telemetry
+curl -H "Authorization: Bearer READ_TOKEN_HERE" https://peek-relay-b9a8.onrender.com/telemetry
 ```
 
 | Response | Meaning |
@@ -46,7 +46,7 @@ is right and the Worker is healthy.
 On the DietPi:
 
 ```bash
-python3 peek-agent.py --push https://peek-relay.peekesp.workers.dev/ingest --token PUSH_TOKEN_HERE
+python3 peek-agent.py --push https://peek-relay-b9a8.onrender.com/ingest --token PUSH_TOKEN_HERE
 ```
 
 Re-run the step 2 curl. You should now get real JSON with `age_s` under 10.
@@ -63,7 +63,7 @@ Wants=network-online.target
 
 [Service]
 Environment=PEEK_PUSH_TOKEN=PUSH_TOKEN_HERE
-ExecStart=/usr/bin/python3 /usr/local/bin/peek-agent --push https://peek-relay.peekesp.workers.dev/ingest
+ExecStart=/usr/bin/python3 /usr/local/bin/peek-agent --push https://peek-relay-b9a8.onrender.com/ingest
 Restart=always
 RestartSec=5
 

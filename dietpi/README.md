@@ -72,7 +72,7 @@ service   running
 at boot   enabled
 machine   dietpi
 interval  5s
-relay     https://peek-relay.peekesp.workers.dev
+relay     https://peek-relay-b9a8.onrender.com
 stream    e67e3b0d5b07d6ba
 
 pushes are being REJECTED - usually the wrong pairing code.

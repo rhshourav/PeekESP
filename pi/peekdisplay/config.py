@@ -23,7 +23,7 @@ PANEL_PREFIX = "PEEK_PANEL_"
 
 DEFAULTS = {
     "PEEK_PAIR_CODE": "",
-    "PEEK_RELAY_BASE": "https://peek-relay.peekesp.workers.dev",
+    "PEEK_RELAY_BASE": "https://peek-relay-b9a8.onrender.com",
     "PEEK_PANEL": "png",
     # The display polls; it does not receive. Five seconds matches the ESP32
     # and the agents, and costs 17,280 requests a day against Cloudflare's free
