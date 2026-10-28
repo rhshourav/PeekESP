@@ -19,13 +19,16 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from peekdisplay import alerts as alerts_mod         # noqa: E402
 from peekdisplay import app, config, panels          # noqa: E402
 from peekdisplay.pairing import InvalidPairCode      # noqa: E402
-from peekdisplay.relay import Relay, RelayError, Machine, Snapshot   # noqa: E402
+from peekdisplay.relay import (                      # noqa: E402
+    Extra, Machine, Relay, RelayError, Snapshot, norm_severity)
 
 
 def build_parser():
@@ -57,6 +60,14 @@ def build_parser():
                    help="one frame from invented data - no relay, no code")
     p.add_argument("--self-test", action="store_true",
                    help="draw a pattern that proves the wiring, then exit")
+    p.add_argument("--test-alert", nargs="?", const="critical", metavar="SEVERITY",
+                   help="show a sample alert (info, warning or critical), sound the "
+                        "buzzer if one is configured, and wait for the button if "
+                        "there is one - proves the alert wiring")
+    p.add_argument("--extras-view", action="store_true",
+                   help="with --demo, draw the extra-sensors footer instead of the usual one")
+    p.add_argument("--no-alerts", action="store_true",
+                   help="show no alerts and make no noise, whatever the config says")
     p.add_argument("--list-panels", action="store_true",
                    help="list panel names and exit")
     p.add_argument("--verbose", "-v", action="store_true")
@@ -67,7 +78,11 @@ DEMO = [
     Machine(host="kushtia-server", age_s=3, cpu_percent=42.5, ram_percent=78.1,
             storage_percent=61.0, storage_total_gb=1117.9,
             storage_free_gb=436.0, cpu_temp_c=48.3, rx_kbps=1284.0,
-            tx_kbps=112.9, uptime_seconds=271830),
+            tx_kbps=112.9, uptime_seconds=271830,
+            extras=[Extra("gpu_percent", 42.5, "GPU", "%"),
+                    Extra("gpu_temp_c", 61.0, "GPU temperature", "\u00b0C"),
+                    Extra("npu_percent", 7.0, "NPU", "%"),
+                    Extra("fan_rpm", 1200.0, "Fan", "rpm")]),
     Machine(host="dhaka-laptop", age_s=7, cpu_percent=91.2, ram_percent=55.0,
             storage_percent=93.0, storage_total_gb=476.0, storage_free_gb=33.0,
             cpu_temp_c=71.0, battery_percent=64, battery_charging=True,
@@ -88,6 +103,80 @@ def make_panel(cfg, args):
         options["path"] = args.out
         options["scale"] = args.scale
     return panels.create(name, **options)
+
+
+def make_alerting(cfg, args):
+    """(AlertCenter, Alarm, ack button or None) from the config.
+
+    A buzzer or button that cannot be opened is reported and skipped, never
+    fatal: a display that refuses to start because an optional beeper is wired
+    wrong is worse than one that shows alerts silently.
+    """
+    settings = alerts_mod.Settings.from_config(cfg)
+    if args.no_alerts:
+        settings.enabled = False
+    center = alerts_mod.AlertCenter(settings, offline_after_s=cfg.offline_after_s)
+
+    alarm = alerts_mod.Alarm()
+    pin = cfg.get("PEEK_BUZZER_PIN", "")
+    if pin != "" and settings.enabled:
+        try:
+            alarm = alerts_mod.make_alarm(pin, cfg.flag("PEEK_BUZZER_ACTIVE_LOW", False))
+        except alerts_mod.AlertHardwareError as err:
+            print("warning: no buzzer - %s" % err, file=sys.stderr)
+
+    button = None
+    ack_pin = cfg.get("PEEK_ACK_PIN", "")
+    if ack_pin != "" and settings.enabled:
+        try:
+            button = alerts_mod.AckButton(ack_pin, center.acknowledge)
+        except alerts_mod.AlertHardwareError as err:
+            print("warning: no acknowledge button - %s" % err, file=sys.stderr)
+    return center, alarm, button
+
+
+def test_alert(panel, cfg, args):
+    """Draw a sample alert and drive the buzzer, so wiring can be checked by
+    eye and ear - the alert equivalent of --self-test."""
+    severity = norm_severity(args.test_alert)
+    center, alarm, button = make_alerting(cfg, args)
+    center.settings.enabled = True
+    center.settings.quiet = alerts_mod.Quiet()      # a test ignores quiet hours
+    now = time.monotonic()
+    center._alerts.append(alerts_mod.Alert(
+        key="test", severity=severity, title="Test alert",
+        body="If you can read this, alerts reach the screen.",
+        source="peek-display", host="test", born=now, expires=now + 60))
+    display = app.Display(panel, None, alerts=center, alarm=alarm,
+                          offline_after_s=cfg.offline_after_s)
+    try:
+        display.draw(Snapshot(machines=DEMO))
+        print("alert     %s, drawn on the %s" % (severity, panel.name))
+        if isinstance(panel, panels.PngPanel):
+            print("wrote     %s" % panel.path)
+        buzzer = isinstance(alarm, alerts_mod.GpioAlarm)
+        if severity == "critical" and buzzer:
+            alarm.ring()
+            print("buzzer    ringing - this is what a critical alert sounds like")
+        elif severity == "warning" and buzzer:
+            alarm.chirp()
+            print("buzzer    two beeps")
+        elif not buzzer:
+            print("buzzer    none configured (PEEK_BUZZER_PIN)")
+        if button is not None:
+            print("button    press it within 8 seconds ...")
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline and center.current() is not None:
+                time.sleep(0.05)
+            print("button    %s" % ("acknowledged - it works" if center.current() is None
+                                    else "NOT pressed (or not wired)"))
+        else:
+            time.sleep(4 if buzzer else 0)
+    finally:
+        alarm.close()
+        if button is not None:
+            button.close()
+    return 0
 
 
 def main(argv=None):
@@ -126,12 +215,18 @@ def main(argv=None):
                 print("wrote     %s" % panel.path)
             return 0
 
+        if args.test_alert:
+            return test_alert(panel, cfg, args)
+
         if args.demo:
             # No relay and no pairing code: this is for looking at a layout on
             # a panel that is not paired to anything yet, which is exactly when
             # you want to see whether it is wired up correctly.
             display = app.Display(panel, relay=None,
-                                  offline_after_s=cfg.offline_after_s)
+                                  offline_after_s=cfg.offline_after_s,
+                                  extras=cfg.flag("PEEK_EXTRAS", True))
+            if args.extras_view:
+                display.step = len(DEMO)    # the turn on which the footer shows extras
             display.draw(Snapshot(machines=DEMO))
             if isinstance(panel, panels.PngPanel):
                 print("wrote %s" % panel.path)
@@ -152,11 +247,16 @@ def main(argv=None):
             print("error: %s" % err, file=sys.stderr)
             return 2
 
+        center, alarm, button = make_alerting(cfg, args)
         display = app.Display(
             panel, relay,
             interval=cfg.int("PEEK_INTERVAL", 5),
             rotate_seconds=cfg.int("PEEK_ROTATE_SECONDS", 8),
             offline_after_s=cfg.offline_after_s,
+            alerts=center if center.settings.enabled else None,
+            alarm=alarm,
+            extras=cfg.flag("PEEK_EXTRAS", True),
+            quiet_screen=center.settings.quiet_screen,
         )
 
         if args.once:
@@ -176,7 +276,19 @@ def main(argv=None):
         print("panel     %s  %sx%s" % (panel.name, *panel.size))
         print("stream    %s" % relay.stream)
         print("polling   every %ss" % cfg.int("PEEK_INTERVAL", 5))
-        display.run()
+        s = center.settings
+        print("alerts    %s%s%s" % (
+            "on" if s.enabled else "off",
+            ", buzzer" if isinstance(alarm, alerts_mod.GpioAlarm) else "",
+            ", quiet %02d:%02d-%02d:%02d" % (s.quiet.start // 60, s.quiet.start % 60,
+                                              s.quiet.end // 60, s.quiet.end % 60)
+            if s.quiet.enabled else ""))
+        try:
+            display.run()
+        finally:
+            alarm.close()
+            if button is not None:
+                button.close()
         return 0
 
 

@@ -53,6 +53,15 @@ class Panel:
     def display(self, payload):
         raise NotImplementedError
 
+    def set_level(self, level):
+        """Brightness from 0.0 (as dark as this panel goes) to 1.0.
+
+        Returns True if the panel did something. Most cannot: a panel with no
+        backlight line and no contrast command has nothing to turn down, and
+        saying so is better than pretending. Used by quiet hours.
+        """
+        return False
+
     def close(self):
         pass
 
@@ -132,12 +141,28 @@ class LumaPanel(Panel):
     """Any luma device. The renderer never learns which."""
 
     def __init__(self, device, width, height, mono=False, round=False,
-                 name="luma"):
+                 name="luma", level_api=None):
         self._device = device
         self.size = (int(width), int(height))
         self.mono = bool(mono)
         self.round = bool(round)
         self.name = name
+        # "contrast" for an OLED (a real 0-255 dimmer), "backlight" for a TFT
+        # (on or off, and only if a backlight pin was wired and configured).
+        self._level_api = level_api
+
+    def set_level(self, level):
+        level = max(0.0, min(1.0, float(level)))
+        try:
+            if self._level_api == "contrast":
+                self._device.contrast(int(level * 255))
+                return True
+            if self._level_api == "backlight" and hasattr(self._device, "backlight"):
+                self._device.backlight(level > 0.5)     # a TFT backlight cannot dim
+                return True
+        except Exception:           # noqa: BLE001 - a dimming failure must not stop the display
+            pass
+        return False
 
     def display(self, image):
         # luma expects the image to match the device exactly; a mismatch is a
@@ -171,7 +196,8 @@ def _lcd(driver, width, height, round=False, rotate=0, **opts):
     if "active_low" in opts:
         kwargs["active_low"] = bool(opts["active_low"])
     device = cls(serial, **kwargs)
-    return LumaPanel(device, width, height, round=round, name=driver)
+    return LumaPanel(device, width, height, round=round, name=driver,
+                     level_api="backlight")
 
 
 def _oled(driver, width, height, rotate=0, **opts):
@@ -187,7 +213,8 @@ def _oled(driver, width, height, rotate=0, **opts):
                       address=opts.get("address", 0x3C), panel=driver)
     cls = getattr(oled, driver)
     device = cls(serial, width=int(width), height=int(height), rotate=int(rotate))
-    return LumaPanel(device, width, height, mono=True, name=driver)
+    return LumaPanel(device, width, height, mono=True, name=driver,
+                     level_api="contrast")
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +303,14 @@ class CharacterPanel(Panel):
         )
         self._shown = None
 
+    def set_level(self, level):
+        """An HD44780 backlight is a switch, not a dimmer."""
+        try:
+            self._lcd.backlight_enabled = float(level) > 0.5
+            return True
+        except Exception:           # noqa: BLE001
+            return False
+
     def display(self, lines):
         lines = list(lines)[: self.rows]
         while len(lines) < self.rows:
@@ -329,6 +364,13 @@ class MatrixPanel(Panel):
         self.size = (8 * int(cascaded), 8)
         self.scroll_delay = float(scroll_delay)
         self.mono = True
+
+    def set_level(self, level):
+        try:
+            self._device.contrast(int(max(0.0, min(1.0, float(level))) * 255))
+            return True
+        except Exception:           # noqa: BLE001
+            return False
 
     def display(self, message):
         # Blocking for the length of the scroll, on purpose. The alternative is

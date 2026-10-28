@@ -12,15 +12,43 @@ a glance at two lines of text is faster than a glance at a bar chart - what a
 
 from __future__ import annotations
 
+import textwrap
+import unicodedata
+
 from .layout import fmt_ago, fmt_capacity, fmt_rate, fmt_uptime
+
+# How many extra sensors join the rotation. A machine can report two dozen; a
+# rotation that long would take three minutes to come round, and the ones people
+# put in a reading first (GPU, NPU) are the ones worth the screen time.
+MAX_EXTRA_FIELDS = 6
+
+
+def _ascii(text):
+    """Text that every character panel can show.
+
+    An HD44780 and the matrix's CP437 font disagree with Unicode about anything
+    past ASCII: a degree sign is a different glyph, or a box, or a crash,
+    depending on the charmap. The standard fields already write "48C" for that
+    reason. Extras and alert text come from outside - a sensor's unit, a
+    security tool's title - so they are folded to ASCII here: accents lose
+    their marks, the degree sign goes, and anything else becomes "?".
+    """
+    text = str(text).replace("\u00b0C", "C").replace("\u00b0", "")
+    text = "".join(ch for ch in unicodedata.normalize("NFKD", text)
+                   if not unicodedata.combining(ch))
+    return text.encode("ascii", "replace").decode("ascii")
 
 
 def _pct(value):
     return "--" if value is None else "%d%%" % round(value)
 
 
-def fields(machine):
-    """The rotation, in order. (label, value) with the label kept short."""
+def fields(machine, extras=True):
+    """The rotation, in order. (label, value) with the label kept short.
+
+    GPU, NPU, fans and anything else a machine reports come after the standard
+    fields, so a reading without them rotates exactly as it always did.
+    """
     out = [
         ("CPU", _pct(machine.cpu_percent)),
         ("RAM", _pct(machine.ram_percent)),
@@ -38,6 +66,9 @@ def fields(machine):
                                         " CHG" if machine.battery_charging else "")))
     if machine.uptime_seconds is not None:
         out.append(("UP", fmt_uptime(machine.uptime_seconds)))
+    if extras:
+        for extra in machine.extras[:MAX_EXTRA_FIELDS]:
+            out.append((_ascii(extra.short), _ascii(extra.text())))
     return out
 
 
@@ -56,7 +87,7 @@ def _pad(text, width):
 
 
 def two_line(machine, snapshot, step, cols=16, offline_after_s=150,
-             machine_index=0, machine_count=1):
+             machine_index=0, machine_count=1, extras=True):
     """Two lines for a character LCD. ``step`` advances the rotation."""
     age = snapshot.age_of(machine)
     online = age < offline_after_s
@@ -75,7 +106,7 @@ def two_line(machine, snapshot, step, cols=16, offline_after_s=150,
     if not online:
         return [_pad(line1, cols), _pad("OFFLINE %s" % fmt_ago(age), cols)]
 
-    rows = fields(machine)
+    rows = fields(machine, extras)
     if not rows:
         return [_pad(line1, cols), _pad("no data", cols)]
     label, value = rows[step % len(rows)]
@@ -83,19 +114,19 @@ def two_line(machine, snapshot, step, cols=16, offline_after_s=150,
     return [_pad(line1, cols), _pad(line2, cols)]
 
 
-def one_line(machine, snapshot, step, cols=16, offline_after_s=150):
+def one_line(machine, snapshot, step, cols=16, offline_after_s=150, extras=True):
     """A single line, for a 16x1 LCD or a narrow matrix."""
     age = snapshot.age_of(machine)
     if age >= offline_after_s:
         return [_pad("%s OFF" % _fit(machine.host, cols - 4), cols)]
-    rows = fields(machine)
+    rows = fields(machine, extras)
     if not rows:
         return [_pad(_fit(machine.host, cols), cols)]
     label, value = rows[step % len(rows)]
     return [_pad("%s %s" % (label, value), cols)]
 
 
-def marquee(machines, snapshot, offline_after_s=150):
+def marquee(machines, snapshot, offline_after_s=150, extras=True):
     """One string for a scrolling LED matrix.
 
     Everything on one pass rather than a rotation: a matrix is already showing
@@ -120,8 +151,64 @@ def marquee(machines, snapshot, offline_after_s=150):
             bits.append("%.0fC" % machine.cpu_temp_c)
         if machine.has_battery:
             bits.append("BAT %d%%" % machine.battery_percent)
+        if extras:
+            for extra in machine.extras[:3]:
+                bits.append("%s %s" % (_ascii(extra.short), _ascii(extra.text())))
         parts.append("  ".join(bits))
 
     # Trailing spaces so the message does not butt against its own head when
     # the scroll wraps.
     return "   *   ".join(parts) + "      "
+
+
+# ---------------------------------------------------------------------------
+#  Alerts
+# ---------------------------------------------------------------------------
+# An alert replaces the dashboard for as long as it lasts, so these are shaped
+# like the dashboard's own presentations: two padded lines, one padded line, or
+# one string to scroll.
+
+_TAG = {"critical": "!!!", "warning": "!!", "info": "i"}
+_WORD = {"critical": "CRITICAL", "warning": "WARNING", "info": "NOTICE"}
+
+
+def _pages(text, width):
+    """Cut text into screens of `width` cells, on word boundaries where it can.
+
+    A character LCD cannot scroll a line without redrawing it, and a title cut
+    off at sixteen characters is often the part that mattered, so a long one is
+    shown as consecutive screens instead of truncated.
+    """
+    out = textwrap.wrap(text, width=width, break_long_words=True) if text else []
+    return out or [""]
+
+
+def alert_lines(alert, count, cols, rows, tick):
+    """Lines for a character LCD. ``tick`` advances through long text."""
+    tag = _TAG.get(alert.severity, "i")
+    who = _ascii(alert.host or alert.source or "")
+    marker = ""
+    if count > 1:
+        marker = " +%d" % (count - 1)
+    pages = _pages(_ascii(alert.title), cols)
+    if alert.body:
+        pages += _pages(_ascii(alert.body), cols)
+    page = pages[tick % len(pages)]
+
+    if rows < 2:
+        return [_pad("%s %s" % (tag, page), cols)]
+    head = "%s %s" % (tag, who)
+    head = _fit(head, cols - len(marker)).ljust(cols - len(marker)) + marker
+    lines = [_pad(head, cols), _pad(page, cols)]
+    return lines[:rows]
+
+
+def alert_marquee(alert, count):
+    """One string for a scrolling matrix, to be shown before the dashboard."""
+    more = "  (+%d more)" % (count - 1) if count > 1 else ""
+    where = " %s" % _ascii(alert.host) if alert.host else ""
+    text = "%s %s%s: %s" % (_TAG.get(alert.severity, "i"), _WORD.get(alert.severity, ""),
+                            where, _ascii(alert.title))
+    if alert.body:
+        text += " - " + _ascii(alert.body)
+    return text + more + "      "

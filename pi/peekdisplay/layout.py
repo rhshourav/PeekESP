@@ -272,12 +272,18 @@ def _arc(draw, centre, radius, percent, palette, width, label, value_font,
 
 
 def render(layout, machines, index, snapshot, offline_after_s=150,
-           message=None):
+           message=None, alert=None, phase=0, flash=False):
     """Draw one frame. Returns a PIL image sized to the panel.
 
     ``message`` replaces the dashboard entirely - used for pairing, for "no
     machines yet" and for a fatal error, all of which are more useful as a
     sentence than as a dashboard full of dashes.
+
+    ``alert`` is (Alert, how many are active) and replaces it too, for as long as
+    the alert lasts. ``phase`` is 0 or 1 and swaps the footer between the usual
+    line and the machine's extra sensors; ``flash`` is the blink of a critical
+    alert. All three default to the old behaviour, so a caller that knows
+    nothing about them draws exactly what it always did.
     """
     p = layout.palette
     image = Image.new("RGB", (layout.width, layout.height), p.bg)
@@ -286,6 +292,9 @@ def render(layout, machines, index, snapshot, offline_after_s=150,
     if message is not None:
         _draw_message(draw, layout, message)
         return image
+
+    if alert is not None:
+        return render_alert(layout, alert[0], alert[1], flash)
 
     if not machines:
         _draw_message(draw, layout, ("No machines", "are reporting yet"))
@@ -354,7 +363,7 @@ def render(layout, machines, index, snapshot, offline_after_s=150,
         _draw_bars(draw, layout, machine, top, bottom)
 
     if layout.show_footer:
-        _draw_footer(draw, layout, machine, bottom + pad // 2)
+        _draw_footer(draw, layout, machine, bottom + pad // 2, phase)
 
     return image
 
@@ -461,7 +470,54 @@ def _draw_bars(draw, layout, machine, top, bottom):
                   shown, font=f_tiny, fill=p.dim)
 
 
-def _draw_footer(draw, layout, machine, y):
+MAX_EXTRA_PAGES = 4
+
+
+def _footer_y(layout):
+    """Where the footer line sits. The same arithmetic render() uses."""
+    return layout.height - layout.pad - (layout.f_small + layout.pad) + layout.pad // 2
+
+
+def _footer_inset(layout, y):
+    """Horizontal margin at the footer's height: the chord, on round glass."""
+    if layout.round:
+        radius = min(layout.width, layout.height) / 2.0 - 1
+        half = chord_half_width(
+            radius, abs(y + layout.f_small / 2.0 - layout.height / 2.0)
+        )
+        return int(layout.width / 2.0 - half) + 3
+    return layout.pad
+
+
+def extras_pages(layout, machine):
+    """This machine's extra sensors, packed into footer lines that fit.
+
+    Whole items only. Cutting a line at the panel's edge prints half a value -
+    "NPU 7" for "NPU 70%" is a wrong number, not a short one - so an item that
+    does not fit starts the next page instead. [] if there is no footer or
+    nothing to show.
+    """
+    if not layout.show_footer or not machine.extras:
+        return []
+    scratch = ImageDraw.Draw(Image.new("L", (1, 1)))
+    fnt = font(layout.f_small)
+    avail = layout.width - 2 * _footer_inset(layout, _footer_y(layout))
+    pages, cur = [], ""
+    for extra in machine.extras:
+        item = "%s %s" % (extra.short, extra.text())
+        trial = (cur + "   " + item) if cur else item
+        if text_size(scratch, trial, fnt)[0] <= avail:
+            cur = trial
+        else:
+            if cur:
+                pages.append(cur)
+            cur = item
+    if cur:
+        pages.append(cur)
+    return pages[:MAX_EXTRA_PAGES]
+
+
+def _draw_footer(draw, layout, machine, y, phase=0):
     p = layout.palette
     f_small = font(layout.f_small)
 
@@ -489,6 +545,14 @@ def _draw_footer(draw, layout, machine, y):
         bits.append("up %s" % fmt_uptime(machine.uptime_seconds))
 
     line = "   ".join(bits)
+    if phase >= 1:
+        # The same line, showing GPU, NPU, fans and whatever else this machine
+        # reports, one page at a time. It takes the footer's place on turns of
+        # its own rather than squeezing in beside the temperature and
+        # throughput: at 240 px those already fill the line.
+        pages = extras_pages(layout, machine)
+        if phase <= len(pages):
+            line = pages[phase - 1]
     if layout.round:
         radius = min(layout.width, layout.height) / 2.0 - 1
         half = chord_half_width(
@@ -553,6 +617,134 @@ def _draw_message(draw, layout, lines):
         draw.text(((layout.width - w) // 2, y), shown, font=fnt,
                   fill=p.text if i == 0 else p.dim)
         y += h + 2
+
+
+# ---------------------------------------------------------------------------
+#  Alerts
+# ---------------------------------------------------------------------------
+
+_SEVERITY_WORD = {"critical": "CRITICAL", "warning": "WARNING", "info": "NOTICE"}
+
+
+def wrap_text(draw, text, fnt, max_w, max_lines):
+    """Greedy word wrap to a pixel width, with an ellipsis if it must be cut.
+
+    Words longer than the line are broken by character: a hostname or a hash in
+    an alert title has no spaces to wrap on, and an overflowing line is drawn
+    off the edge of the glass where nobody can read it.
+    """
+    words = str(text).split()
+    lines, cur = [], ""
+    for word in words:
+        trial = (cur + " " + word).strip()
+        if text_size(draw, trial, fnt)[0] <= max_w:
+            cur = trial
+            continue
+        if cur:
+            lines.append(cur)
+            cur = ""
+        while text_size(draw, word, fnt)[0] > max_w and len(word) > 1:
+            cut = len(word) - 1
+            while cut > 1 and text_size(draw, word[:cut], fnt)[0] > max_w:
+                cut -= 1
+            # Prefer to break after a hyphen, underscore, dot or slash: hostnames
+            # and paths are what long titles are made of, and "dhaka-laptop"
+            # reads better as "dhaka-" / "laptop" than as "dhaka-lapto" / "p".
+            soft = max((i + 1 for i, ch in enumerate(word[:cut]) if ch in "-_./"), default=0)
+            if soft >= max(3, cut // 2):
+                cut = soft
+            lines.append(word[:cut])
+            word = word[cut:]
+        cur = word
+    if cur:
+        lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = fit_text(draw, lines[-1] + "\u2026\u2026", fnt, max_w)
+    return lines
+
+
+def render_alert(layout, alert, count=1, flash=False):
+    """A full-screen alert in the severity's colour.
+
+    Critical blinks between solid and inverted so it can be seen across a room;
+    warning and notice hold steady. A mono panel has no colour to carry the
+    difference, so there critical blinks white-on-black with black-on-white,
+    warning gets a border, and notice is plain.
+    """
+    p = layout.palette
+    mono = p.crit == p.text
+    colour = {"critical": p.crit, "warning": p.warn}.get(alert.severity, p.accent)
+    if mono:
+        solid = alert.severity == "critical" and not flash
+    else:
+        solid = not (alert.severity == "critical" and flash)
+    bg, fg = (colour, p.bg) if solid else (p.bg, colour)
+    # The dim text colour is for the dashboard. On a solid colour it would be
+    # barely there, so everything is drawn in the one foreground.
+    image = Image.new("RGB", (layout.width, layout.height), bg)
+    draw = ImageDraw.Draw(image)
+
+    if mono and alert.severity == "warning":
+        draw.rectangle((0, 0, layout.width - 1, layout.height - 1), outline=fg, width=2)
+
+    w, h = layout.width, layout.height
+    side = max(layout.pad, int(w * 0.16)) if layout.round else layout.pad + 2
+    max_w = w - side * 2
+
+    if h <= 40:
+        # A 128x32 strip: one line, the severity as a leading mark.
+        mark = {"critical": "!!", "warning": "!", "info": "i"}.get(alert.severity, "i")
+        fnt = font(layout.f_body, True)
+        shown = fit_text(draw, "%s %s" % (mark, alert.title), fnt, max_w)
+        tw, th = text_size(draw, shown, fnt)
+        draw.text(((w - tw) // 2, (h - th) // 2 - 1), shown, font=fnt, fill=fg)
+        return image
+
+    y = int(h * 0.14) if layout.round else layout.pad + 1
+    f_head, f_small, f_tiny = font(layout.f_small, True), font(layout.f_small), font(layout.f_tiny)
+    # Round glass has a narrower usable width than its diameter, so the title
+    # is set smaller there; the big size turns a hostname into a pile of breaks.
+    f_title = font(max(layout.f_body, int(layout.f_big * (0.62 if layout.round else 0.8)))
+                   if h >= 200 else layout.f_body, True)
+
+    head = _SEVERITY_WORD.get(alert.severity, "NOTICE")
+    hw, hh = text_size(draw, head, f_head)
+    if layout.round:
+        draw.text(((w - hw) // 2, y), head, font=f_head, fill=fg)
+    else:
+        draw.text((side, y), head, font=f_head, fill=fg)
+        if count > 1:
+            more = "+%d" % (count - 1)
+            mw, _ = text_size(draw, more, f_head)
+            draw.text((w - side - mw, y), more, font=f_head, fill=fg)
+    y += hh + max(3, layout.pad)
+
+    caption = " \u00b7 ".join(x for x in (alert.host, alert.source) if x)
+    cap_h = text_size(draw, "Ag", f_tiny)[1] + 3 if (caption and h >= 60) else 0
+    bottom = h - (int(h * 0.12) if layout.round else layout.pad) - cap_h
+
+    title_h = text_size(draw, "Ag", f_title)[1] + 2
+    room = max(1, (bottom - y) // title_h)
+    title_lines = wrap_text(draw, alert.title, f_title, max_w, min(3, room))
+    for line in title_lines:
+        tw, _ = text_size(draw, line, f_title)
+        draw.text(((w - tw) // 2 if layout.round else side, y), line, font=f_title, fill=fg)
+        y += title_h
+
+    if alert.body and y < bottom - 6:
+        body_h = text_size(draw, "Ag", f_small)[1] + 2
+        for line in wrap_text(draw, alert.body, f_small, max_w, max(0, (bottom - y) // body_h)):
+            tw, _ = text_size(draw, line, f_small)
+            draw.text(((w - tw) // 2 if layout.round else side, y), line, font=f_small, fill=fg)
+            y += body_h
+
+    if cap_h:
+        shown = fit_text(draw, caption, f_tiny, max_w)
+        tw, _ = text_size(draw, shown, f_tiny)
+        draw.text(((w - tw) // 2, h - cap_h - (int(h * 0.1) if layout.round else layout.pad // 2)),
+                  shown, font=f_tiny, fill=fg)
+    return image
 
 
 def circular_mask(image):

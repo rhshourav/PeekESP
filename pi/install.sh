@@ -68,6 +68,32 @@ say ""
 say "panel     $PANEL"
 
 # ---------------------------------------------------------------------------
+#  Alert hardware (optional)
+# ---------------------------------------------------------------------------
+# Alerts - a message from a machine, a machine going offline - appear on the
+# screen whatever is wired up. A buzzer makes a critical one audible and a
+# button silences it. Both are optional, so the question is skippable and the
+# answer is checked: a pin number that is not a number would otherwise be
+# written to the config and fail at the first alert, not now.
+BUZZER=""
+ACK=""
+if [ -e /dev/tty ]; then
+    say ""
+    say "Alerts show on the screen. An ACTIVE buzzer on a GPIO pin makes a critical"
+    say "one audible, and a push button (pin to ground) silences it. Both optional."
+    BUZZER=$(ask "Buzzer GPIO pin, BCM number (blank for none): ")
+    case "$BUZZER" in
+        ''|*[!0-9]*) [ -n "$BUZZER" ] && say "not a pin number - no buzzer"; BUZZER="" ;;
+    esac
+    if [ -n "$BUZZER" ]; then
+        ACK=$(ask "Acknowledge button GPIO pin (blank for none): ")
+        case "$ACK" in
+            ''|*[!0-9]*) [ -n "$ACK" ] && say "not a pin number - no button"; ACK="" ;;
+        esac
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 #  Dependencies
 # ---------------------------------------------------------------------------
 say "installing dependencies ..."
@@ -77,6 +103,13 @@ apt-get update -qq
 # twenty-minute build, and the packaged one is what the system libraries were
 # compiled against anyway.
 apt-get install -y -qq python3 python3-pil python3-pip >/dev/null
+
+# gpiozero only if there is a buzzer or a button to drive. It is what talks to
+# the pin on every Pi model, including the 5, where RPi.GPIO does not work.
+if [ -n "$BUZZER$ACK" ]; then
+    apt-get install -y -qq python3-gpiozero >/dev/null \
+        || say "could not install python3-gpiozero - the buzzer will not work until it is"
+fi
 
 if [ -n "$PKGS" ]; then
     # --break-system-packages is required on Debian 12 and later, where the
@@ -138,7 +171,9 @@ fetch() {
 for f in peek-display.py; do
     fetch "$REPO_RAW/pi/$f" "$PREFIX/$f"
 done
-for f in __init__.py app.py character.py config.py layout.py panels.py pairing.py relay.py; do
+# alerts.py is new, and this list is explicit: leave it out and an upgraded
+# service dies on its first import instead of showing a clear error.
+for f in __init__.py alerts.py app.py character.py config.py layout.py panels.py pairing.py relay.py; do
     fetch "$REPO_RAW/pi/peekdisplay/$f" "$PREFIX/peekdisplay/$f"
 done
 
@@ -177,11 +212,31 @@ if [ ! -f "$CONF" ]; then
 # The pairing code is the credential: the stream and both tokens derive from
 # it, so anything that can read this file can push telemetry to your display.
 PEEK_PAIR_CODE=$CODE
-PEEK_RELAY_BASE=https://peek-relay-b9a8.onrender.com
+PEEK_RELAY_BASE=https://peek-relay.peekesp.workers.dev
 
 PEEK_PANEL=$PANEL
 PEEK_INTERVAL=5
 PEEK_ROTATE_SECONDS=8
+
+# --- alerts ----------------------------------------------------------------
+# On by default. They show on screen; nothing makes a noise unless a buzzer pin
+# is set below. A message from a machine, a machine going offline, and this
+# display losing the relay each become an alert.
+#PEEK_ALERTS=1
+#PEEK_OFFLINE_ALERTS=1
+#PEEK_OFFLINE_SEVERITY=warning
+#PEEK_ALERT_SECONDS=30
+#PEEK_CRITICAL_SECONDS=600
+# An ACTIVE buzzer (one that makes its own tone) and a button to ground, BCM pins.
+PEEK_BUZZER_PIN=$BUZZER
+PEEK_ACK_PIN=$ACK
+# Quiet hours silence the buzzer and hide everything but critical:
+#PEEK_QUIET=22:00-07:00
+#PEEK_QUIET_DAYS=all
+#PEEK_QUIET_CRITICAL=1
+#PEEK_QUIET_SCREEN=none        # none | dim | off, for a panel that can
+# GPU / NPU / fan readings in the footer and the LCD rotation:
+#PEEK_EXTRAS=1
 
 # Anything after PEEK_PANEL_ is passed to the driver, so an unusual address or
 # an extra pin needs no code change:
@@ -194,6 +249,25 @@ else
     # Keep the existing settings; only correct the panel if it changed.
     sed -i "s|^PEEK_PANEL=.*|PEEK_PANEL=$PANEL|" "$CONF"
     say "kept the existing $CONF"
+    # An upgrade: say what is new, once, as comments, so the defaults stay the
+    # defaults and nobody's settings change underneath them.
+    if ! grep -q 'PEEK_ALERTS\|PEEK_QUIET' "$CONF"; then
+        cat >> "$CONF" <<EOF
+
+# --- alerts (new) ------------------------------------------------------------
+# On by default and shown on screen; no sound without a buzzer pin.
+#PEEK_ALERTS=1
+#PEEK_OFFLINE_ALERTS=1
+#PEEK_QUIET=22:00-07:00
+#PEEK_QUIET_SCREEN=none        # none | dim | off
+#PEEK_EXTRAS=1
+EOF
+    fi
+    if [ -n "$BUZZER" ]; then
+        grep -v '^PEEK_BUZZER_PIN=\|^PEEK_ACK_PIN=' "$CONF" > "$CONF.new" || true
+        printf 'PEEK_BUZZER_PIN=%s\nPEEK_ACK_PIN=%s\n' "$BUZZER" "$ACK" >> "$CONF.new"
+        mv "$CONF.new" "$CONF"
+    fi
 fi
 chmod 0600 "$CONF"
 
@@ -253,6 +327,7 @@ fi
 
 say ""
 say "  peek-display --self-test      prove the wiring"
+say "  peek-display --test-alert     show a sample alert; sound the buzzer if there is one"
 say "  peek-display --demo           a frame from invented data"
 say "  journalctl -u $SVC -f"
 say "  sudo nano $CONF"

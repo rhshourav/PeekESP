@@ -23,7 +23,7 @@ PANEL_PREFIX = "PEEK_PANEL_"
 
 DEFAULTS = {
     "PEEK_PAIR_CODE": "",
-    "PEEK_RELAY_BASE": "https://peek-relay-b9a8.onrender.com",
+    "PEEK_RELAY_BASE": "https://peek-relay.peekesp.workers.dev",
     "PEEK_PANEL": "png",
     # The display polls; it does not receive. Five seconds matches the ESP32
     # and the agents, and costs 17,280 requests a day against Cloudflare's free
@@ -35,6 +35,30 @@ DEFAULTS = {
     # Five missed polls, the same judgement the firmware makes.
     "PEEK_OFFLINE_AFTER_POLLS": "5",
     "PEEK_BRIGHTNESS": "",
+
+    # --- alerts (all optional; see the README) --------------------------------
+    # Alerts are on by default: a message a machine sends, a machine going
+    # offline, and this display losing the relay all show on screen. Nothing
+    # makes a noise unless a buzzer pin is set.
+    "PEEK_ALERTS": "1",
+    "PEEK_OFFLINE_ALERTS": "1",
+    "PEEK_OFFLINE_SEVERITY": "warning",
+    "PEEK_INFO_SECONDS": "10",
+    "PEEK_ALERT_SECONDS": "30",
+    "PEEK_CRITICAL_SECONDS": "600",
+    "PEEK_ALERT_MAX_AGE": "900",
+    # An ACTIVE buzzer on this BCM pin, and a push button to ground on another.
+    "PEEK_BUZZER_PIN": "",
+    "PEEK_BUZZER_ACTIVE_LOW": "0",
+    "PEEK_ACK_PIN": "",
+    # Quiet hours: "22:00-07:00". Silences the buzzer and hides non-critical
+    # alerts; PEEK_QUIET_SCREEN also dims or blanks a panel that can.
+    "PEEK_QUIET": "",
+    "PEEK_QUIET_DAYS": "all",
+    "PEEK_QUIET_CRITICAL": "1",
+    "PEEK_QUIET_SCREEN": "none",
+    # Extra sensors (GPU, NPU, fans, ...) in the footer and the LCD rotation.
+    "PEEK_EXTRAS": "1",
 }
 
 
@@ -93,6 +117,20 @@ class Config:
             return int(float(self.get(key, default)))
         except (TypeError, ValueError):
             return default
+
+    def float(self, key, default=0.0):
+        try:
+            return float(self.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    def flag(self, key, default=False):
+        """on/off for a setting that is on or off. Unset or blank is `default`,
+        so a setting a person has not mentioned keeps its documented default."""
+        value = str(self._v.get(key, DEFAULTS.get(key, "")) or "").strip().lower()
+        if not value:
+            return default
+        return value in ("1", "true", "yes", "on")
 
     @property
     def panel_options(self):

@@ -7,7 +7,9 @@ in Python - the drawing is where the dependencies live.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import ssl
 import time
 import urllib.error
@@ -16,7 +18,7 @@ from dataclasses import dataclass, field
 
 from .pairing import derive
 
-DEFAULT_RELAY = "https://peek-relay-b9a8.onrender.com"
+DEFAULT_RELAY = "https://peek-relay.peekesp.workers.dev"
 USER_AGENT = "PeekESP-pi/1.0"
 TIMEOUT = 15
 
@@ -53,6 +55,204 @@ def _sensorless(value):
     return None if value is None or value < 0 else value
 
 
+# ---------------------------------------------------------------------------
+#  Extra sensors and messages (PROTOCOL.md sections 1 and 2)
+# ---------------------------------------------------------------------------
+# Optional in every reading and ignored by anything that does not know them, so
+# a reading without them parses exactly as it always did.
+
+MAX_EXTRAS = 24                 # the same cap the agents and the phone apply
+MAX_MESSAGES = 10
+_KEY_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+
+# Names the standard reading already uses. An extra must never shadow one.
+RESERVED_KEYS = frozenset((
+    "host", "age_s", "messages", "metrics", "latest_fw",
+    "cpu_percent", "ram_percent", "cpu_temp_c", "storage_percent",
+    "storage_total_gb", "storage_free_gb", "uptime_seconds",
+    "net_rx_kbps", "net_tx_kbps",
+    "battery_percent", "battery_charging", "battery_ac", "battery_minutes",
+))
+
+# Longest first, so "_mbps" is never read as "_mb". The unit is how a plain key
+# is recognised as a measurement at all: a key with no such ending is relay
+# bookkeeping and is ignored, never promoted to a sensor.
+_SUFFIX_UNITS = (
+    ("_percent", "%"), ("_seconds", "s"), ("_mbps", "Mbps"), ("_kbps", "kbps"),
+    ("_pct", "%"), ("_mhz", "MHz"), ("_ghz", "GHz"), ("_rpm", "rpm"),
+    ("_mb", "MB"), ("_gb", "GB"), ("_ms", "ms"),
+    ("_c", "\u00b0C"), ("_w", "W"), ("_v", "V"), ("_a", "A"),
+)
+
+# Short enough for sixteen cells. Anything not listed is made from its label.
+_SHORT = {
+    "gpu_percent": "GPU", "gpu_temp_c": "GPU\u00b0", "npu_percent": "NPU",
+    "gpu_power_w": "GPUW", "gpu_mem_percent": "GMEM", "vram_used_gb": "VRAM",
+    "gpu_fan_percent": "GFAN", "gpu_fan_rpm": "GFAN", "fan_rpm": "FAN",
+    "disk_temp_c": "DSK\u00b0", "cpu_power_w": "CPUW",
+}
+
+
+def unit_for_key(key):
+    for suffix, unit in _SUFFIX_UNITS:
+        if key.endswith(suffix):
+            return unit
+    return ""
+
+
+def label_for_key(key):
+    """gpu_percent -> "GPU"; custom_sensor_w -> "Custom Sensor"."""
+    base = key
+    for suffix, _unit in _SUFFIX_UNITS:
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+            break
+    if key in ("gpu_percent", "npu_percent"):
+        return base.upper()
+    if key == "gpu_temp_c":
+        return "GPU temperature"
+    return " ".join(w.capitalize() for w in base.split("_") if w) or key
+
+
+@dataclass
+class Extra:
+    """One extra sensor: GPU, NPU, a fan, or anything a machine chose to add."""
+
+    key: str
+    value: float
+    label: str = ""
+    unit: str = ""
+    maximum: float | None = None
+
+    @property
+    def short(self):
+        """A label for a 16-cell line: three to five characters."""
+        if self.key in _SHORT:
+            return _SHORT[self.key]
+        word = re.sub(r"[^A-Za-z0-9]", "", self.label or self.key).upper()
+        return word[:5] or "EXTRA"
+
+    def text(self):
+        """"42%", "61\u00b0C", "148W", "1200rpm". No space: cells are scarce."""
+        v = self.value
+        shown = "%d" % round(v) if abs(v) >= 100 or v == int(v) else "%.1f" % v
+        return shown + self.unit
+
+
+def parse_extras(raw):
+    """Every extra sensor in one machine's reading, plain keys then "metrics".
+
+    A negative number means "this machine has no such sensor" and is skipped,
+    never shown as zero - the same rule every other sensor follows.
+    """
+    out, seen = [], set()
+
+    def number(v):
+        if v is None or isinstance(v, bool):
+            return None
+        f = _f(v)
+        return None if f is None or f < 0 else f
+
+    for key in sorted(k for k in raw if isinstance(k, str)):
+        if key in RESERVED_KEYS or not _KEY_RE.match(key):
+            continue
+        unit = unit_for_key(key)
+        value = number(raw[key])
+        if not unit or value is None:
+            continue                 # no recognised ending: bookkeeping, not a sensor
+        seen.add(key)
+        out.append(Extra(key, value, label_for_key(key), unit))
+
+    metrics = raw.get("metrics")
+    if isinstance(metrics, dict):
+        for key, spec in metrics.items():
+            if (not isinstance(key, str) or key in seen or key in RESERVED_KEYS
+                    or not _KEY_RE.match(key)):
+                continue
+            if isinstance(spec, dict):
+                value = number(spec.get("value"))
+                label = str(spec.get("label") or label_for_key(key))[:40]
+                unit = str(spec.get("unit") if spec.get("unit") is not None
+                           else unit_for_key(key))[:8]
+                maximum = _f(spec.get("max"))
+            else:
+                value, label, unit, maximum = (number(spec), label_for_key(key),
+                                               unit_for_key(key), None)
+            if value is None:
+                continue
+            seen.add(key)
+            out.append(Extra(key, value, label, unit, maximum))
+    return out[:MAX_EXTRAS]
+
+
+# Exactly the words PROTOCOL.md promises the phone understands.
+_CRITICAL = frozenset(("critical", "red", "high", "alert", "emergency", "fatal", "error"))
+_WARNING = frozenset(("warning", "yellow", "amber", "orange", "warn", "medium"))
+SEVERITIES = ("info", "warning", "critical")
+
+
+def norm_severity(value):
+    s = str(value or "").strip().lower()
+    if s in _CRITICAL:
+        return "critical"
+    if s in _WARNING:
+        return "warning"
+    return "info"
+
+
+def severity_rank(severity):
+    return SEVERITIES.index(severity) if severity in SEVERITIES else 0
+
+
+_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _clip(value, n):
+    return " ".join(_CTRL.sub("", str(value if value is not None else "")).split())[:n]
+
+
+@dataclass
+class Message:
+    """Something a machine, or a tool running on it, wants you to see."""
+
+    id: str
+    severity: str
+    title: str
+    body: str = ""
+    source: str = "machine"
+    ts: float | None = None          # when it happened, epoch seconds; None if unsaid
+
+
+def parse_messages(raw):
+    out = []
+    rows = raw.get("messages")
+    if not isinstance(rows, list):
+        return out
+    for item in rows[:MAX_MESSAGES]:
+        if not isinstance(item, dict):
+            continue
+        body = _clip(item.get("body", item.get("message", "")), 400)
+        title = _clip(item.get("title", ""), 80) or _clip(body, 80)
+        if not title and not body:
+            continue
+        ts = _f(item.get("ts"))
+        if ts is not None:
+            if ts > 1e11:
+                ts /= 1000.0         # milliseconds
+            if ts <= 0:
+                ts = None
+        # No id: made from the content, with a digest rather than hash(), which
+        # is randomised per process and would turn a re-sent message into a new
+        # one every restart.
+        mid = _clip(item.get("id"), 64) or "t" + hashlib.sha1(
+            ("%s|%s|%s" % (title, body, item.get("severity"))).encode("utf-8", "replace")
+        ).hexdigest()[:12]
+        out.append(Message(
+            id=mid, severity=norm_severity(item.get("severity")), title=title,
+            body=body, source=_clip(item.get("source"), 40) or "machine", ts=ts))
+    return out
+
+
 @dataclass
 class Machine:
     """One machine's most recent reading."""
@@ -72,6 +272,9 @@ class Machine:
     rx_kbps: float | None = None
     tx_kbps: float | None = None
     uptime_seconds: int | None = None
+    # Optional, and empty for a reading that carries neither.
+    extras: list = field(default_factory=list)
+    messages: list = field(default_factory=list)
 
     @property
     def has_battery(self):
@@ -95,6 +298,8 @@ class Machine:
             rx_kbps=_sensorless(_f(raw.get("net_rx_kbps"))),
             tx_kbps=_sensorless(_f(raw.get("net_tx_kbps"))),
             uptime_seconds=_i(_sensorless(_f(raw.get("uptime_seconds")))),
+            extras=parse_extras(raw),
+            messages=parse_messages(raw),
         )
 
 
