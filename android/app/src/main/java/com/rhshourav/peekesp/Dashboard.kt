@@ -55,6 +55,7 @@ import com.rhshourav.peekesp.data.Freshness
 import com.rhshourav.peekesp.data.History
 import com.rhshourav.peekesp.data.HistoryConfig
 import com.rhshourav.peekesp.data.HistoryRange
+import com.rhshourav.peekesp.data.KnownMachine
 import com.rhshourav.peekesp.data.Machine
 import com.rhshourav.peekesp.data.Metrics
 import com.rhshourav.peekesp.data.Parser
@@ -148,7 +149,13 @@ private fun toneFor(info: com.rhshourav.peekesp.data.BatteryInfo, offline: Boole
 //  Dashboard
 // ----------------------------------------------------------------------------
 
-/** The Machines card, then the selected machine's history. Emits into the caller's column. */
+/**
+ * The Machines card, then the selected machine's history. Emits into the caller's column.
+ *
+ * The list is the relay's live machines plus every machine this phone still holds history for. The relay
+ * forgets a machine once it has been silent for a while; that is right for the widget, which should only show
+ * what is there, but the history is the phone's own, so a machine that has gone quiet stays chartable.
+ */
 @Composable
 internal fun DashboardPanel(
     snap: Snapshot,
@@ -157,16 +164,35 @@ internal fun DashboardPanel(
     range: HistoryRange,
     onRange: (HistoryRange) -> Unit,
 ) {
-    SectionCard(title = "Machines", subtitle = linkLine(snap)) {
-        FleetList(snap, selected, onSelect)
+    val ctx = LocalContext.current
+    val liveHosts = snap.machines.map { it.host }
+    var rev by remember { mutableStateOf(0) }       // bumped when a machine's history is forgotten
+
+    // Read again only when the set of live machines changes (or one is forgotten), not on every 5 s reading.
+    val known by produceState(emptyList<KnownMachine>(), liveHosts, rev) {
+        value = withContext(Dispatchers.IO) { runCatching { History.roster(ctx) }.getOrDefault(emptyList()) }
     }
-    val m = snap.machines.firstOrNull { it.host == selected } ?: return
-    MachineHistory(m, snap, range, onRange)
+    // Until the first answer is in, a machine missing from the list means nothing: do not call it gone yet.
+    val settled = snap.link != LinkState.CONNECTING || snap.machines.isNotEmpty()
+    val archive = if (settled) known.filter { it.host !in liveHosts } else emptyList()
+
+    val sel = selected?.takeIf { h -> h in liveHosts || archive.any { it.host == h } }
+        ?: liveHosts.firstOrNull()
+        ?: archive.firstOrNull()?.host
+
+    SectionCard(title = "Machines", subtitle = linkLine(snap)) {
+        FleetList(snap, archive, sel, onSelect)
+    }
+    val current = snap.machines.firstOrNull { it.host == sel }
+    val lastSeen = archive.firstOrNull { it.host == sel }?.lastSeenMs
+    if (sel != null && (current != null || lastSeen != null)) {
+        MachineHistory(sel, current, lastSeen, snap, range, onRange, onForgotten = { rev++ })
+    }
 }
 
 @Composable
-private fun FleetList(snap: Snapshot, selected: String?, onSelect: (String) -> Unit) {
-    if (snap.machines.isEmpty()) {
+private fun FleetList(snap: Snapshot, archive: List<KnownMachine>, selected: String?, onSelect: (String) -> Unit) {
+    if (snap.machines.isEmpty() && archive.isEmpty()) {
         Text(
             if (snap.link == LinkState.CONNECTING) "Waiting for the first reading\u2026"
             else "No readings yet. Machines appear here once a device or agent pushes to your code.",
@@ -176,17 +202,59 @@ private fun FleetList(snap: Snapshot, selected: String?, onSelect: (String) -> U
         return
     }
     snap.machines.forEach { m -> FleetRow(m, snap, m.host == selected) { onSelect(m.host) } }
-    val reporting = snap.machines.count { Battery.of(it).present }
-    Text(
-        if (reporting == 0) {
-            "None of these report a battery. A desktop never does; on a laptop, the agent has to send " +
-                "battery_percent for it to appear here and on the widget."
-        } else {
-            "$reporting of ${snap.machines.size} report a battery. Tap a machine to chart it."
-        },
-        style = MaterialTheme.typography.bodySmall,
-        color = Color(Palette.DIM),
-    )
+    if (snap.machines.isEmpty()) {
+        Text("No machine is reporting right now.", style = MaterialTheme.typography.bodyMedium, color = Color(Palette.DIM))
+    } else {
+        val reporting = snap.machines.count { Battery.of(it).present }
+        Text(
+            if (reporting == 0) {
+                "None of these report a battery. A desktop never does; on a laptop, the agent has to send " +
+                    "battery_percent for it to appear here and on the widget."
+            } else {
+                "$reporting of ${snap.machines.size} report a battery. Tap a machine to chart it."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(Palette.DIM),
+        )
+    }
+    if (archive.isNotEmpty()) {
+        SubHeading("Not reporting")
+        archive.forEach { k -> ArchiveRow(k, snap.nowMs, k.host == selected) { onSelect(k.host) } }
+        Text(
+            "The relay no longer lists these. Their history stays on this phone; tap one to chart it.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(Palette.DIM),
+        )
+    }
+}
+
+/** A machine the relay has dropped: calm, not alarming. It is not broken, it is just not here. */
+@Composable
+private fun ArchiveRow(k: KnownMachine, nowMs: Long, selected: Boolean, onClick: () -> Unit) {
+    val ctx = LocalContext.current
+    val keepMs = k.lastSeenMs + HistoryConfig.retentionDays(ctx) * DAY_MS - nowMs
+    val silentFor = ((nowMs - k.lastSeenMs) / 1000).coerceAtLeast(0)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) Color(Palette.CYAN).copy(alpha = 0.10f) else Color.Transparent)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(k.host, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "Last reading ${Fmt.ago(silentFor)} ago",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(Palette.DIM),
+                maxLines = 1,
+            )
+        }
+        Text(keptShort(keepMs), style = MaterialTheme.typography.bodySmall, color = Color(Palette.DIM), maxLines = 1)
+    }
 }
 
 @Composable
@@ -238,14 +306,75 @@ private fun FleetRow(m: Machine, s: Snapshot, selected: Boolean, onClick: () -> 
 //  One machine's history
 // ----------------------------------------------------------------------------
 
+private const val HOUR_MS = 3_600_000L
+private const val DAY_MS = 86_400_000L
+
+private fun plural(n: Long, unit: String) = "$n $unit" + if (n == 1L) "" else "s"
+
+/** Short, for a list row: how much longer the phone keeps a machine's history. */
+private fun keptShort(leftMs: Long): String = when {
+    leftMs <= 0 -> "expiring"
+    leftMs >= DAY_MS -> "kept ${leftMs / DAY_MS}d more"
+    leftMs >= HOUR_MS -> "kept ${leftMs / HOUR_MS}h more"
+    else -> "kept <1h more"
+}
+
+private fun keptSentence(leftMs: Long): String = "Its history stays on this phone for " + when {
+    leftMs <= 0 -> "less than an hour more"
+    leftMs >= DAY_MS -> plural(leftMs / DAY_MS, "more day")
+    leftMs >= HOUR_MS -> plural(leftMs / HOUR_MS, "more hour")
+    else -> "less than an hour more"
+}
+
+/** What can honestly be said of a machine the relay no longer lists. Not an alarm: nothing is wrong with the phone. */
+private fun retiredStatus(lastSeenMs: Long?, nowMs: Long): LiveStatus = LiveStatus(
+    if (lastSeenMs == null) "Not reporting"
+    else "Not reporting \u00B7 last reading ${Fmt.ago(((nowMs - lastSeenMs) / 1000).coerceAtLeast(0))} ago",
+    Palette.DIM, false,
+)
+
+/** Stands in for a machine's values while its last stored reading is still being read. */
+private fun unknownMachine(host: String) = Machine(
+    host = host, ageS = 0, cpu = null, ram = null, storagePct = null, storageTotalGb = null, storageFreeGb = null,
+    tempC = null, batteryPct = null, batteryMin = null, charging = false, ac = false,
+    rxKbps = null, txKbps = null, uptimeS = null,
+)
+
+/**
+ * One machine's history. [current] is its live reading, or null when the relay no longer lists it: then the
+ * charts show it as it was when it went quiet (its last reading is the right-hand edge, and its last
+ * values stand in for the live ones, marked "last"), and the card offers to forget it.
+ */
 @Composable
-private fun MachineHistory(m: Machine, snap: Snapshot, range: HistoryRange, onRange: (HistoryRange) -> Unit) {
+private fun MachineHistory(
+    host: String,
+    current: Machine?,
+    lastSeenMs: Long?,
+    snap: Snapshot,
+    range: HistoryRange,
+    onRange: (HistoryRange) -> Unit,
+    onForgotten: () -> Unit,
+) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     val on = HistoryConfig.enabled(ctx)
-    val ranges = HistoryRange.availableFor(HistoryConfig.retentionDays(ctx))
+    val days = HistoryConfig.retentionDays(ctx)
+    val ranges = HistoryRange.availableFor(days)
     val r = if (range in ranges) range else ranges.first()
 
-    SectionCard(title = m.host, subtitle = liveStatus(m, snap).text) {
+    val retired = current == null
+    val stored by produceState<Machine?>(null, host, retired) {
+        value = if (retired) {
+            withContext(Dispatchers.IO) { runCatching { History.lastReading(ctx, host) }.getOrNull() }
+        } else {
+            null
+        }
+    }
+    val m = current ?: stored ?: unknownMachine(host)
+    val status = if (retired) retiredStatus(lastSeenMs, snap.nowMs) else liveStatus(m, snap)
+    var confirmForget by remember { mutableStateOf(false) }
+
+    SectionCard(title = host, subtitle = status.text) {
         Segmented(options = ranges.map { it to it.label }, selected = r, onSelect = onRange)
         if (!on) {
             Text(
@@ -254,12 +383,55 @@ private fun MachineHistory(m: Machine, snap: Snapshot, range: HistoryRange, onRa
                 color = Color(Palette.AMBER),
             )
         }
+        if (retired) {
+            val keepMs = (lastSeenMs ?: snap.nowMs) + days * DAY_MS - snap.nowMs
+            Text(
+                "The relay no longer lists this machine, so there is no live reading. ${keptSentence(keepMs)} " +
+                    "(change that under Configure, History). Charts show the ${r.label} before it went quiet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(Palette.DIM),
+            )
+            OutlinedButton(onClick = { confirmForget = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("Forget this machine", color = Color(Palette.RED))
+            }
+        }
+    }
+
+    if (confirmForget) {
+        AlertDialog(
+            onDismissRequest = { confirmForget = false },
+            containerColor = Color(Palette.PANEL),
+            titleContentColor = Color(Palette.TEXT),
+            textContentColor = Color(Palette.TEXT),
+            title = { Text("Forget $host?") },
+            text = {
+                Text(
+                    "Its charts and its availability record are deleted from this phone. If it ever reports " +
+                        "again, it starts a fresh history.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmForget = false
+                    scope.launch {
+                        withContext(Dispatchers.IO) { runCatching { History.forget(ctx, host) } }
+                        onForgotten()
+                    }
+                }) { Text("Forget", color = Color(Palette.RED)) }
+            },
+            dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("Keep") } },
+        )
     }
     if (!on) return
 
-    // Reload when the machine, the range, or a fresh reading changes.
-    val data by produceState<ChartData?>(null, m.host, r, snap.fetchedAtMs) {
-        value = withContext(Dispatchers.IO) { runCatching { History.load(ctx, m.host, r) }.getOrNull() }
+    // A machine that is not live is charted ending at its own last reading: "the last hour" of a machine that
+    // went quiet three days ago is empty, and an empty chart reads as lost data.
+    val endMs = if (retired && lastSeenMs != null) lastSeenMs + ChartMath.bucketMs(r) else null
+
+    // Reload when the machine, the range, or a fresh reading changes. A machine that is not live gets no
+    // fresh readings, so it loads once.
+    val data by produceState<ChartData?>(null, host, r, if (retired) lastSeenMs else snap.fetchedAtMs) {
+        value = withContext(Dispatchers.IO) { runCatching { History.load(ctx, host, r, endMs) }.getOrNull() }
     }
     val d = data
     if (d == null) {
@@ -267,12 +439,16 @@ private fun MachineHistory(m: Machine, snap: Snapshot, range: HistoryRange, onRa
         return
     }
     // The timeline comes first: it explains the gaps in everything below it.
-    if (d.spans.isNotEmpty()) AvailabilityCard(m, snap, d)
+    if (d.spans.isNotEmpty()) AvailabilityCard(status, d)
     if (d.stats.samples < 2) {
-        SectionCard(title = "Collecting data") {
+        SectionCard(title = if (retired) "Not enough history" else "Collecting data") {
             Text(
-                "Not enough readings yet to draw a chart. While this screen is open a reading is " +
-                    "logged every 15 seconds; in the background the widget logs one every 15 minutes.",
+                if (retired) {
+                    "Too few readings were logged in this window to draw a chart. Try a longer range."
+                } else {
+                    "Not enough readings yet to draw a chart. While this screen is open a reading is " +
+                        "logged every 15 seconds; in the background the widget logs one every 15 minutes."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color(Palette.DIM),
             )
@@ -280,32 +456,34 @@ private fun MachineHistory(m: Machine, snap: Snapshot, range: HistoryRange, onRa
         return
     }
 
+    // What stands in for "now" at the top right of a card: the last value this machine reported.
+    val asLast: (String) -> String = { if (retired && it != "--") "last $it" else it }
     val gap = ChartMath.gapMs(d.bucketMs)
     val pct: (Double) -> String = { "${it.roundToInt()}%" }
     // Every chart is shaded where the phone or the machine was out, so a gap always has a reason beside it.
     val outages = d.spans.mapNotNull { sp -> sp.kind.toBand()?.let { Band(it, sp.start, sp.end) } }
 
     MetricCard(
-        title = "CPU", live = m.cpu?.let { "${Fmt.pct(it)}%" } ?: "--", accent = Color(Palette.CYAN), d = d,
+        title = "CPU", live = asLast(m.cpu?.let { "${Fmt.pct(it)}%" } ?: "--"), accent = Color(Palette.CYAN), d = d,
         series = listOf(ChartSeries("CPU", "", Color(Palette.CYAN), d.buckets.map { it.t to it.cpu })),
         yMin = 0.0, yMax = 100.0, fmt = pct, stats = listOf("" to d.stats.cpu), bands = outages,
     )
     MetricCard(
-        title = "Memory", live = m.ram?.let { "${Fmt.pct(it)}%" } ?: "--", accent = Color(Palette.MAGENTA), d = d,
+        title = "Memory", live = asLast(m.ram?.let { "${Fmt.pct(it)}%" } ?: "--"), accent = Color(Palette.MAGENTA), d = d,
         series = listOf(ChartSeries("RAM", "", Color(Palette.MAGENTA), d.buckets.map { it.t to it.ram })),
         yMin = 0.0, yMax = 100.0, fmt = pct, stats = listOf("" to d.stats.ram), bands = outages,
     )
     d.stats.temp?.let { t ->
         val (lo, hi) = ChartMath.axisFor(t.min, t.max)
         MetricCard(
-            title = "Temperature", live = Fmt.temp(m.tempC), accent = Color(Palette.AMBER), d = d,
+            title = "Temperature", live = asLast(Fmt.temp(m.tempC)), accent = Color(Palette.AMBER), d = d,
             series = listOf(ChartSeries("Temp", "", Color(Palette.AMBER), d.buckets.map { it.t to it.temp })),
             yMin = lo, yMax = hi, fmt = { "${it.roundToInt()}\u00B0" }, stats = listOf("" to t), bands = outages,
         )
     }
     val peak = max(d.stats.rx?.max ?: 0.0, d.stats.tx?.max ?: 0.0)
     MetricCard(
-        title = "Network", live = "\u2193 ${Fmt.rate(m.rxKbps)}  \u2191 ${Fmt.rate(m.txKbps)}", accent = Color(Palette.GREEN), d = d,
+        title = "Network", live = asLast("\u2193 ${Fmt.rate(m.rxKbps)}  \u2191 ${Fmt.rate(m.txKbps)}"), accent = Color(Palette.GREEN), d = d,
         series = listOf(
             ChartSeries("download", "\u2193", Color(Palette.GREEN), d.buckets.map { it.t to it.rx }),
             ChartSeries("upload", "\u2191", Color(Palette.VIOLET), d.buckets.map { it.t to it.tx }),
@@ -315,7 +493,7 @@ private fun MachineHistory(m: Machine, snap: Snapshot, range: HistoryRange, onRa
     )
     MetricCard(
         title = "Storage used",
-        live = m.storagePct?.let { "${Fmt.pct(it)}%" + (m.storageFreeGb?.let { f -> " \u00B7 ${Fmt.capacity(f)} free" } ?: "") } ?: "--",
+        live = asLast(m.storagePct?.let { "${Fmt.pct(it)}%" + (m.storageFreeGb?.let { f -> " \u00B7 ${Fmt.capacity(f)} free" } ?: "") } ?: "--"),
         accent = Color(Palette.CYAN), d = d,
         series = listOf(ChartSeries("Storage", "", Color(Palette.CYAN), d.buckets.map { it.t to it.storage })),
         yMin = 0.0, yMax = 100.0, fmt = pct, stats = listOf("" to d.stats.storage), bands = outages,
@@ -324,7 +502,7 @@ private fun MachineHistory(m: Machine, snap: Snapshot, range: HistoryRange, onRa
         val info = Battery.of(m)
         MetricCard(
             title = "Battery",
-            live = if (info.present) "${info.pct}% \u00B7 ${info.tail}" else "--",
+            live = asLast(if (info.present) "${info.pct}% \u00B7 ${info.tail}" else "--"),
             accent = Color(toneFor(info, false).let { if (it == Palette.DIM) Palette.GREEN else it }), d = d,
             series = listOf(ChartSeries("Battery", "", Color(Palette.GREEN), d.buckets.map { it.t to it.bat })),
             yMin = 0.0, yMax = 100.0, fmt = pct, stats = listOf("" to b),
@@ -351,7 +529,7 @@ private fun MachineHistory(m: Machine, snap: Snapshot, range: HistoryRange, onRa
         }
         MetricCard(
             title = label,
-            live = live?.let { Metrics.format(it.value, unit) } ?: "--",
+            live = asLast(live?.let { Metrics.format(it.value, unit) } ?: "--"),
             accent = accent, d = d,
             series = listOf(ChartSeries(label, "", accent, x.points)),
             yMin = lo, yMax = hi, fmt = { Metrics.format(it, unit) },
@@ -441,7 +619,7 @@ private fun MetricCard(
                     val dim = Color(Palette.DIM)
                     Text(timeText(d.fromMs, long), style = MaterialTheme.typography.labelSmall, color = dim)
                     Text(timeText((d.fromMs + d.toMs) / 2, long), style = MaterialTheme.typography.labelSmall, color = dim)
-                    Text("now", style = MaterialTheme.typography.labelSmall, color = dim)
+                    Text(if (d.anchored) timeText(d.toMs, long) else "now", style = MaterialTheme.typography.labelSmall, color = dim)
                 }
                 Text(summary, style = MaterialTheme.typography.bodySmall, color = Color(Palette.DIM))
                 if (hasOutage) {
@@ -480,9 +658,8 @@ private data class LegendItem(val kind: Coverage?, val label: String, val share:
  * amber hatching = the phone was online but the relay did not answer; empty = nobody was looking.
  */
 @Composable
-private fun AvailabilityCard(m: Machine, snap: Snapshot, d: ChartData) {
+private fun AvailabilityCard(live: LiveStatus, d: ChartData) {
     val sh = Availability.shares(d.spans, d.fromMs, d.toMs)
-    val live = liveStatus(m, snap)
     val long = d.range.ms > 86_400_000L
 
     fun pct(v: Double) = when {
@@ -515,7 +692,7 @@ private fun AvailabilityCard(m: Machine, snap: Snapshot, d: ChartData) {
                 val dim = Color(Palette.DIM)
                 Text(timeText(d.fromMs, long), style = MaterialTheme.typography.labelSmall, color = dim)
                 Text(timeText((d.fromMs + d.toMs) / 2, long), style = MaterialTheme.typography.labelSmall, color = dim)
-                Text("now", style = MaterialTheme.typography.labelSmall, color = dim)
+                Text(if (d.anchored) timeText(d.toMs, long) else "now", style = MaterialTheme.typography.labelSmall, color = dim)
             }
             items.chunked(2).forEach { pair ->
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
