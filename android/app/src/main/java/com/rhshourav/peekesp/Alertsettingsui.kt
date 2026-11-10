@@ -226,20 +226,27 @@ internal fun AlertSettingsPanel(machines: List<Machine>, foreground: Boolean, no
             color = Color(Palette.DIM),
         )
         SubHeading("Notify me about")
-        if (machines.isEmpty()) {
+        // A muted machine stays on this list after the relay stops listing it: otherwise it could never be unmuted.
+        val hosts = (machines.map { it.host } + s.mutedMachines).distinct().sorted()
+        if (hosts.isEmpty()) {
             Text(
                 "Machines appear here once they report.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color(Palette.DIM),
             )
         }
-        machines.forEach { m ->
-            val muted = m.host in s.mutedMachines
+        hosts.forEach { host ->
+            val muted = host in s.mutedMachines
+            val reporting = machines.any { it.host == host }
             ToggleRow(
-                title = m.host,
-                subtitle = if (muted) "Muted: still listed in Alerts, never notified." else "Notifications on.",
+                title = host,
+                subtitle = when {
+                    muted -> "Muted: still listed in Alerts, never notified."
+                    !reporting -> "Notifications on. Not reporting right now."
+                    else -> "Notifications on."
+                },
                 checked = !muted,
-                onChange = { on -> update(s.copy(mutedMachines = if (on) s.mutedMachines - m.host else s.mutedMachines + m.host)) },
+                onChange = { on -> update(s.copy(mutedMachines = if (on) s.mutedMachines - host else s.mutedMachines + host)) },
             )
         }
     }

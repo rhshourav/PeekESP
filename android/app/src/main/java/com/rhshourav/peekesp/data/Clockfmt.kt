@@ -17,7 +17,12 @@ object ClockFmt {
         val weekday: String,
         val date: String,
         val zone: String,
-    )
+        /** "Dhaka" for Asia/Dhaka; empty for a zone that is not a place ("UTC"). */
+        val place: String = "",
+    ) {
+        /** What the clock page's header says: "Dhaka UTC+6", or just "UTC+6" when there is no place. */
+        val label: String get() = if (place.isEmpty()) zone else "$place $zone"
+    }
 
     fun parts(nowMs: Long, zone: ZoneId, locale: Locale, is24h: Boolean): Parts {
         val t = Instant.ofEpochMilli(nowMs).atZone(zone)
@@ -35,6 +40,7 @@ object ClockFmt {
             weekday = t.dayOfWeek.getDisplayName(TextStyle.FULL, locale),
             date = "${t.dayOfMonth} ${t.month.getDisplayName(TextStyle.FULL, locale)} ${t.year}",
             zone = utcLabel(t.offset.totalSeconds),
+            place = ClockZones.cityOf(zone.id),
         )
     }
 

@@ -57,6 +57,7 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
                 runCatching {
                     History.record(app, r.machines, now)
                     History.recordLink(app, LinkKind.OK, now)
+                    History.noteAbsent(app, r.machines.map { it.host }, now)
                 }
                 // The same engine the open app uses, so an alert does not depend on which of them noticed.
                 runCatching { AlertRunner.process(app, r.machines, now) }

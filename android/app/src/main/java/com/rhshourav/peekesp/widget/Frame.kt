@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.mutableStateOf
 import com.rhshourav.peekesp.data.Battery
 import com.rhshourav.peekesp.data.ClockFmt
+import com.rhshourav.peekesp.data.ClockZones
 import com.rhshourav.peekesp.data.Fmt
 import com.rhshourav.peekesp.data.Freshness
 import com.rhshourav.peekesp.data.Machine
@@ -158,13 +159,15 @@ data class Frame(
     val showBattery: Boolean = true,
     /** Every machine, for the battery page. */
     val machines: List<Machine> = emptyList(),
+    /** The zone the clock page is showing, so TalkBack reads the right weekday and date. */
+    val zone: ZoneId = ZoneId.systemDefault(),
 ) {
     /** The widget is a bitmap, so everything on it has to be said here for TalkBack. */
     fun describe(): String {
         if (kind == PageKind.CLOCK) {
             // No time here: it would be stale. The live clock on the widget is read out by itself.
-            val p = ClockFmt.parts(nowMs, ZoneId.systemDefault(), Locale.getDefault(), false)
-            val parts = mutableListOf("PeekESP clock", "${p.weekday}, ${p.date}")
+            val p = ClockFmt.parts(nowMs, zone, Locale.getDefault(), false)
+            val parts = mutableListOf("PeekESP clock", if (p.place.isEmpty()) "${p.weekday}, ${p.date}" else "${p.place}: ${p.weekday}, ${p.date}")
             message?.let { parts += it }
             if (count > 1) parts += "tap for the next page"
             return parts.joinToString(". ")
@@ -236,6 +239,7 @@ object FrameBuilder {
             return Frame(
                 machine = null, index = index, count = pages.size, sinceFetchS = since,
                 kind = PageKind.CLOCK, nowMs = nowMs, drawTime = false, showBattery = look.battery,
+                zone = ClockZones.effective(look.clockZone),
                 // A clock with no machines would otherwise hide why there is nothing else to see.
                 message = if (machines.isEmpty()) NOTHING else null,
             )

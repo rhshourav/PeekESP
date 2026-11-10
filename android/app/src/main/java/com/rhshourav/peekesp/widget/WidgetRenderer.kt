@@ -18,12 +18,12 @@ import com.rhshourav.peekesp.data.Battery
 import com.rhshourav.peekesp.data.BatteryInfo
 import com.rhshourav.peekesp.data.BatteryLevel
 import com.rhshourav.peekesp.data.ClockFmt
+import com.rhshourav.peekesp.data.ClockZones
 import com.rhshourav.peekesp.data.Fmt
 import com.rhshourav.peekesp.data.Freshness
 import com.rhshourav.peekesp.data.Machine
 import com.rhshourav.peekesp.data.PowerState
 import com.rhshourav.peekesp.data.WidgetStyle
-import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -135,7 +135,7 @@ object WidgetRenderer {
         dot(c, g, f.link.color.takeIf { m != null || f.kind == PageKind.POWER } ?: Palette.DIM)
 
         if (f.kind == PageKind.CLOCK) {
-            clockPage(ctx, c, g, f, reg, bold)
+            clockPage(ctx, c, g, f, look, reg, bold)
             return bmp
         }
         if (f.kind == PageKind.POWER) {
@@ -359,10 +359,16 @@ object WidgetRenderer {
      * The clock page. On the home screen the big digits are a live TextClock laid
      * over the gap left here; with [Frame.drawTime] set, they are drawn instead.
      */
-    private fun clockPage(ctx: Context, c: Canvas, g: Geo, f: Frame, reg: Typeface, bold: Typeface) {
-        val p = ClockFmt.parts(f.nowMs, ZoneId.systemDefault(), Locale.getDefault(), DateFormat.is24HourFormat(ctx))
+    private fun clockPage(ctx: Context, c: Canvas, g: Geo, f: Frame, look: WidgetStyle, reg: Typeface, bold: Typeface) {
+        // The region the user chose, or the phone's own, which follows them when they travel.
+        val zone = ClockZones.effective(look.clockZone)
+        val is24 = look.clockHours.is24(DateFormat.is24HourFormat(ctx))
+        val p = ClockFmt.parts(f.nowMs, zone, Locale.getDefault(), is24)
 
-        text(c, "// ${p.zone}", g.x(44f), g.y(3f), ink(reg, g.m(12f), Palette.DIM))
+        // "Dhaka UTC+6": the place says which clock this is, the offset says how far from UTC. A long city
+        // name is cut with an ellipsis before it reaches the page counter.
+        val head = ink(reg, g.m(12f), Palette.DIM)
+        text(c, fit("// ${p.label}", head, 130f * g.sx), g.x(44f), g.y(3f), head)
         if (f.count > 1) {
             textRight(c, "${f.index + 1}/${f.count}", g.x(206f), g.y(3f), ink(reg, g.m(12f), Palette.CYAN))
         }
