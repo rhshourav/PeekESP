@@ -36,7 +36,15 @@ data class ChartData(
     val spans: List<Span>,
     /** Sensors beyond the standard set (GPU, NPU, fan...), each with its own line. */
     val extras: List<ExtraChart> = emptyList(),
+    /**
+     * True when the window ends at a machine's last reading instead of at "now": the view of a machine
+     * the relay no longer lists, so the right-hand edge is a time, not the present.
+     */
+    val anchored: Boolean = false,
 )
+
+/** A machine this phone holds history for, whether or not the relay still lists it. */
+data class KnownMachine(val host: String, val lastSeenMs: Long, val readings: Int)
 
 /** One extra sensor over the window: bucketed averages for the line, exact min/avg/max for the numbers. */
 data class ExtraChart(val key: String, val points: List<Pair<Long, Double?>>, val stat: Stat?)
@@ -114,6 +122,7 @@ object History {
     @Volatile private var helper: HistoryDb? = null
     private val lastT = HashMap<String, Long>()
     private val openOffline = HashMap<String, Pair<Long, Long>>()   // machine -> (rowid, push)
+    private var lastSeen: HashMap<String, Long>? = null              // machine -> time of its newest stored reading
     private var lastLink: LinkEvent? = null
     private var lastPrune = 0L
 
@@ -165,6 +174,7 @@ object History {
                     d.insert("extra", null, xv)
                 }
                 lastT[m.host] = t
+                lastSeen?.put(m.host, t)
             }
             d.setTransactionSuccessful()
         } finally {
@@ -242,6 +252,7 @@ object History {
         d.delete("extra", "t < ?", arrayOf(cutoff.toString()))
         d.delete("link", "t < ?", arrayOf(cutoff.toString()))
         d.delete("offline", "seen < ?", arrayOf(cutoff.toString()))
+        lastSeen = null      // some machines may have lost their last reading: read the roster again
     }
 
     @Synchronized
@@ -254,26 +265,155 @@ object History {
         baselines.clear()
         lastT.clear()
         openOffline.clear()
+        lastSeen = null
         lastLink = null
         d.execSQL("VACUUM")
+    }
+
+    // ------------------------------------------------------------------------
+    //  Machines the relay has stopped listing
+    // ------------------------------------------------------------------------
+
+    /**
+     * Every machine this phone has readings for within the retention window, most recently heard first.
+     * The relay drops a machine after it has been silent for a while; this phone does not, so the
+     * dashboard builds its list from both. Empty when logging is off, as the charts are.
+     */
+    fun roster(ctx: Context): List<KnownMachine> {
+        if (!HistoryConfig.enabled(ctx)) return emptyList()
+        val cutoff = System.currentTimeMillis() - HistoryConfig.retentionDays(ctx) * 86_400_000L
+        return db(ctx).readableDatabase.rawQuery(
+            "SELECT machine, MAX(t), COUNT(*) FROM samples WHERE t >= $cutoff GROUP BY machine ORDER BY MAX(t) DESC",
+            null,
+        ).use { c -> buildList { while (c.moveToNext()) add(KnownMachine(c.getString(0), c.getLong(1), c.getInt(2))) } }
+    }
+
+    /**
+     * A machine's newest stored reading, as a [Machine], so a machine the relay no longer lists can still
+     * be shown with the values it had when it went quiet. [Machine.ageS] is how long ago that was.
+     */
+    fun lastReading(ctx: Context, machine: String, nowMs: Long = System.currentTimeMillis()): Machine? {
+        val d = db(ctx).readableDatabase
+        val got: Pair<Long, Machine>? = d.rawQuery(
+            "SELECT t, cpu, ram, temp, storage, rx, tx, bat, charging, ac FROM samples WHERE machine = ? ORDER BY t DESC LIMIT 1",
+            arrayOf(machine),
+        ).use { c ->
+            if (!c.moveToFirst()) {
+                null
+            } else {
+                val t = c.getLong(0)
+                t to Machine(
+                    host = machine,
+                    ageS = ((nowMs - t) / 1000).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+                    cpu = c.dbl(1), ram = c.dbl(2), storagePct = c.dbl(4), storageTotalGb = null, storageFreeGb = null,
+                    tempC = c.dbl(3), batteryPct = if (c.isNull(7)) null else c.getInt(7), batteryMin = null,
+                    charging = c.getInt(8) != 0, ac = c.getInt(9) != 0,
+                    rxKbps = c.dbl(5), txKbps = c.dbl(6), uptimeS = null,
+                )
+            }
+        }
+        val (t, m) = got ?: return null
+        // The numbers in the SQL are Longs we computed, not user input; the machine name is bound.
+        val extras = d.rawQuery("SELECT k, v FROM extra WHERE machine = ? AND t = $t", arrayOf(machine)).use { c ->
+            buildList {
+                while (c.moveToNext()) {
+                    val k = c.getString(0)
+                    add(Extra(k, Metrics.label(k), Metrics.unitFor(k) ?: "", c.getDouble(1), null))
+                }
+            }
+        }
+        return m.copy(extras = extras)
+    }
+
+    /** Deletes one machine's whole history from this phone. The user's call: nothing else ever removes a machine early. */
+    @Synchronized
+    fun forget(ctx: Context, machine: String) {
+        val d = db(ctx).writableDatabase
+        d.beginTransaction()
+        try {
+            d.delete("samples", "machine = ?", arrayOf(machine))
+            d.delete("extra", "machine = ?", arrayOf(machine))
+            d.delete("offline", "machine = ?", arrayOf(machine))
+            d.setTransactionSuccessful()
+        } finally {
+            d.endTransaction()
+        }
+        lastT.remove(machine)
+        openOffline.remove(machine)
+        lastSeen = null
+        baselines.keys.removeAll { it.startsWith("$machine|") }
+    }
+
+    /**
+     * A reading arrived listing [present]. Any machine this phone has history for that is not in it is not
+     * listed by the relay any more, and the outage is written down so a chart can say "machine offline"
+     * for that stretch instead of leaving it blank.
+     *
+     * Deliberately careful about what it claims:
+     *  - Only a reply that listed at least one machine counts. An empty reply is also what a relay that is
+     *    waking up or restarting says, and that must never be blamed on the machines.
+     *  - The outage starts when it was first seen to be missing (or carries on from the silence the relay
+     *    reported before it dropped the machine), never back-dated to the last stored reading: while this
+     *    phone was not looking, it does not know, and the chart says "no data" for that.
+     */
+    @Synchronized
+    fun noteAbsent(ctx: Context, present: Collection<String>, fetchedAtMs: Long) {
+        if (present.isEmpty() || !HistoryConfig.enabled(ctx)) return
+        val d = db(ctx).writableDatabase
+        val here = present.toHashSet()
+        val cutoff = System.currentTimeMillis() - HistoryConfig.retentionDays(ctx) * 86_400_000L
+        for ((host, last) in lastSeenMap(d)) {
+            if (host in here || last < cutoff) continue
+            extendAbsence(d, host, last, fetchedAtMs)
+        }
+    }
+
+    private fun lastSeenMap(d: SQLiteDatabase): HashMap<String, Long> =
+        lastSeen ?: HashMap<String, Long>().also { m ->
+            d.rawQuery("SELECT machine, MAX(t) FROM samples GROUP BY machine", null)
+                .use { c -> while (c.moveToNext()) m[c.getString(0)] = c.getLong(1) }
+            lastSeen = m
+        }
+
+    private fun extendAbsence(d: SQLiteDatabase, host: String, lastSample: Long, now: Long) {
+        val latest = d.rawQuery(
+            "SELECT rowid, seen FROM offline WHERE machine = ? ORDER BY seen DESC LIMIT 1", arrayOf(host),
+        ).use { c -> if (c.moveToFirst()) c.getLong(0) to c.getLong(1) else null }
+        if (latest != null && latest.second >= lastSample && now - latest.second <= Availability.LINK_HOLD_MS) {
+            // The same outage, looked at again: carry it on.
+            d.execSQL("UPDATE offline SET seen = ? WHERE rowid = ?", arrayOf<Any>(now, latest.first))
+        } else {
+            // First time it is seen to be missing. `push` is stored a minute early because a span starts one
+            // minute after the push it follows (Availability.OFFLINE_AFTER_MS), which puts it exactly at `now`.
+            val v = ContentValues()
+            v.put("machine", host)
+            v.put("push", now - Availability.OFFLINE_AFTER_MS)
+            v.put("seen", now)
+            d.insert("offline", null, v)
+        }
     }
 
     fun count(ctx: Context): Long = DatabaseUtils.queryNumEntries(db(ctx).readableDatabase, "samples")
 
     fun sizeBytes(ctx: Context): Long = ctx.getDatabasePath(DB_NAME).length()
 
-    /** One machine over one range: bucketed averages for the lines, and exact min/avg/max for the numbers. */
-    fun load(ctx: Context, machine: String, range: HistoryRange): ChartData {
-        val now = System.currentTimeMillis()
-        val from = now - range.ms
+    /**
+     * One machine over one range: bucketed averages for the lines, and exact min/avg/max for the numbers.
+     * The window ends now, or at [endMs] when given: a machine the relay no longer lists is charted as it
+     * was when it went quiet, since "the last hour" of a machine gone for three days is empty.
+     */
+    fun load(ctx: Context, machine: String, range: HistoryRange, endMs: Long? = null): ChartData {
+        val end = endMs ?: System.currentTimeMillis()
+        val from = end - range.ms
         val bucket = ChartMath.bucketMs(range)
         val d = db(ctx).readableDatabase
+        val win = "t >= $from AND t <= $end"
 
         // The numbers in the SQL are Longs we computed, not user input; the machine name is bound.
         val buckets = ArrayList<Bucket>()
         d.rawQuery(
             "SELECT AVG(t), AVG(cpu), AVG(ram), AVG(temp), AVG(storage), AVG(rx), AVG(tx), AVG(bat), MAX(charging) " +
-                "FROM samples WHERE machine = ? AND t >= $from GROUP BY t / $bucket ORDER BY 1",
+                "FROM samples WHERE machine = ? AND $win GROUP BY t / $bucket ORDER BY 1",
             arrayOf(machine),
         ).use { c ->
             while (c.moveToNext()) {
@@ -291,7 +431,7 @@ object History {
                 "MIN(cpu), AVG(cpu), MAX(cpu), MIN(ram), AVG(ram), MAX(ram), " +
                 "MIN(temp), AVG(temp), MAX(temp), MIN(storage), AVG(storage), MAX(storage), " +
                 "MIN(rx), AVG(rx), MAX(rx), MIN(tx), AVG(tx), MAX(tx), MIN(bat), AVG(bat), MAX(bat) " +
-                "FROM samples WHERE machine = ? AND t >= $from",
+                "FROM samples WHERE machine = ? AND $win",
             arrayOf(machine),
         ).use { c ->
             if (!c.moveToFirst()) {
@@ -308,12 +448,12 @@ object History {
         // Phone-side outages: read from a little before the window, since one holds into it.
         val link = ArrayList<LinkEvent>()
         d.rawQuery(
-            "SELECT t, state FROM link WHERE t >= ${from - Availability.LINK_HOLD_MS} ORDER BY t", null,
+            "SELECT t, state FROM link WHERE t >= ${from - Availability.LINK_HOLD_MS} AND t <= $end ORDER BY t", null,
         ).use { c -> while (c.moveToNext()) link += LinkEvent(c.getLong(0), LinkKind.of(c.getInt(1))) }
 
         // Machine silences: a machine counts as offline once it has been quiet a minute.
         val silent = ArrayList<Pair<Long, Long>>()
-        d.rawQuery("SELECT push, seen FROM offline WHERE machine = ? AND seen >= $from", arrayOf(machine)).use { c ->
+        d.rawQuery("SELECT push, seen FROM offline WHERE machine = ? AND seen >= $from AND push <= $end", arrayOf(machine)).use { c ->
             while (c.moveToNext()) {
                 val start = c.getLong(0) + Availability.OFFLINE_AFTER_MS
                 if (c.getLong(1) > start) silent += start to c.getLong(1)
@@ -321,28 +461,28 @@ object History {
         }
 
         val spans = Availability.build(
-            from = from, to = now, times = buckets.map { it.t },
+            from = from, to = end, times = buckets.map { it.t },
             joinGapMs = ChartMath.gapMs(bucket), tailMs = bucket,
             link = link, machineOffline = silent,
         )
 
         // Extra sensors: whichever ones this machine reported in the window.
         val keys = ArrayList<String>()
-        d.rawQuery("SELECT DISTINCT k FROM extra WHERE machine = ? AND t >= $from ORDER BY k", arrayOf(machine))
+        d.rawQuery("SELECT DISTINCT k FROM extra WHERE machine = ? AND $win ORDER BY k", arrayOf(machine))
             .use { c -> while (c.moveToNext()) keys += c.getString(0) }
         val extras = keys.map { k ->
             val pts = ArrayList<Pair<Long, Double?>>()
             d.rawQuery(
-                "SELECT AVG(t), AVG(v) FROM extra WHERE machine = ? AND k = ? AND t >= $from GROUP BY t / $bucket ORDER BY 1",
+                "SELECT AVG(t), AVG(v) FROM extra WHERE machine = ? AND k = ? AND $win GROUP BY t / $bucket ORDER BY 1",
                 arrayOf(machine, k),
             ).use { c -> while (c.moveToNext()) pts += c.getDouble(0).toLong() to c.dbl(1) }
             val st = d.rawQuery(
-                "SELECT MIN(v), AVG(v), MAX(v) FROM extra WHERE machine = ? AND k = ? AND t >= $from",
+                "SELECT MIN(v), AVG(v), MAX(v) FROM extra WHERE machine = ? AND k = ? AND $win",
                 arrayOf(machine, k),
             ).use { c -> if (c.moveToFirst()) c.stat(0) else null }
             ExtraChart(k, pts, st)
         }
-        return ChartData(range, from, now, bucket, buckets, stats, spans, extras)
+        return ChartData(range, from, end, bucket, buckets, stats, spans, extras, anchored = endMs != null)
     }
 
     private val baselines = HashMap<String, Pair<Long, Baseline?>>()
