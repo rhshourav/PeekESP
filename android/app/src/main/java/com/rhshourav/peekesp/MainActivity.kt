@@ -121,6 +121,7 @@ import com.rhshourav.peekesp.data.AlertStore
 import com.rhshourav.peekesp.data.AppTheme
 import com.rhshourav.peekesp.data.Battery
 import com.rhshourav.peekesp.data.BatteryLevel
+import com.rhshourav.peekesp.data.ClockZones
 import com.rhshourav.peekesp.data.FetchResult
 import com.rhshourav.peekesp.data.Fmt
 import com.rhshourav.peekesp.data.History
@@ -280,8 +281,8 @@ private fun Tone.color(): Color = Color(
 
 private enum class Tab { DASHBOARD, ALERTS, CONFIGURE }
 
-/** Configure has a lot in it: the everyday settings, and everything about alerts. */
-private enum class ConfigPage { GENERAL, ALERTS }
+/** Configure is split by what you are doing: setting the app up, shaping the widget, or tuning alerts. */
+private enum class ConfigPage { GENERAL, WIDGET, ALERTS }
 
 @Composable
 private fun Screen(
@@ -418,6 +419,7 @@ private fun Screen(
                         runCatching {
                             History.record(ctx, result.machines, now)
                             History.recordLink(ctx, LinkKind.OK, now)
+                            History.noteAbsent(ctx, result.machines.map { it.host }, now)
                         }
                         // Separate, so a history problem never stops an alert.
                         runCatching { AlertRunner.process(ctx, result.machines, now) }
@@ -469,8 +471,6 @@ private fun Screen(
     LaunchedEffect(foreground) { if (!foreground) redrawWidgets(ctx) }
 
     val current = setup
-    // The machine being charted: the one picked, or the first if that one is gone.
-    val sel = selected?.takeIf { h -> snapshot.machines.any { it.host == h } } ?: snapshot.machines.firstOrNull()?.host
     val chip = when {
         current == null -> ChipState("Not paired", Palette.AMBER)
         snapshot.link == LinkState.LIVE -> ChipState("Live", Palette.GREEN)
@@ -541,7 +541,7 @@ private fun Screen(
                 } else {
                     DashboardPanel(
                         snap = snapshot,
-                        selected = sel,
+                        selected = selected,
                         onSelect = { selected = it },
                         range = range,
                         onRange = { range = it },
@@ -557,26 +557,19 @@ private fun Screen(
                 Header("Configure", "Appearance, widget, history, alerts and connection", null)
                 notice?.let { NoticeBanner(it) }
                 Segmented(
-                    options = listOf(ConfigPage.GENERAL to "General", ConfigPage.ALERTS to "Alerts"),
+                    options = listOf(ConfigPage.GENERAL to "General", ConfigPage.WIDGET to "Widget", ConfigPage.ALERTS to "Alerts"),
                     selected = configPage,
                     onSelect = { configPage = it },
                 )
 
                 if (configPage == ConfigPage.GENERAL) {
 
-                SectionCard(title = "Appearance", subtitle = "How the app looks. The widget has its own setting below.") {
+                SectionCard(title = "Appearance", subtitle = "How the app looks. The widget has its own setting on the Widget page.") {
                     Segmented(
                         options = AppTheme.values().map { it to it.label },
                         selected = themeMode,
                         onSelect = onTheme,
                     )
-                }
-
-                SectionCard(
-                    title = "Widget",
-                    subtitle = "Changes reach your home screen automatically.",
-                ) {
-                    WidgetPanel(store = styleStore, onApply = { scope.launch { redrawWidgets(ctx) } })
                 }
 
                 SectionCard(
@@ -622,6 +615,8 @@ private fun Screen(
                 }
 
                 AboutFooter(ctx)
+                } else if (configPage == ConfigPage.WIDGET) {
+                    WidgetPanel(store = styleStore, onApply = { scope.launch { redrawWidgets(ctx) } })
                 } else {
                     AlertSettingsPanel(
                         machines = snapshot.machines,
@@ -881,6 +876,7 @@ private fun sampleFrame(kind: PageKind, nowMs: Long, count: Int, index: Int, loo
     machines = if (kind == PageKind.POWER) SAMPLE_MACHINES else emptyList(),
     index = index, count = count, sinceFetchS = 0, offline = false, link = Link.OK, latencyMs = 42,
     kind = kind, nowMs = nowMs, drawTime = true, showBattery = look.battery,
+    zone = ClockZones.effective(look.clockZone),
 )
 
 private fun PageKind.label() = when (this) {
@@ -889,6 +885,12 @@ private fun PageKind.label() = when (this) {
     PageKind.CLOCK -> "Clock"
 }
 
+/**
+ * The Widget page: a live preview, how it looks, and what it shows. Emits cards into the caller's column.
+ *
+ * The look controls sit straight under the preview so a slider and the picture it changes are on screen
+ * together. Pages (and the clock's region) come last: they decide what exists, not how it looks.
+ */
 @Composable
 private fun WidgetPanel(store: StyleStore, onApply: () -> Unit) {
     val ctx = LocalContext.current
@@ -933,82 +935,97 @@ private fun WidgetPanel(store: StyleStore, onApply: () -> Unit) {
         }
     }
 
-    // A bright, busy backdrop so transparency is easy to judge.
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Brush.linearGradient(listOf(Color(0xFF3A1C71), Color(0xFFD76D77), Color(0xFFFFAF7B))))
-            .drawBehind {
-                drawCircle(Color(0x66FFFFFF), size.minDimension * 0.35f, Offset(size.width * 0.15f, size.height * 0.2f))
-                drawCircle(Color(0x5500E5FF), size.minDimension * 0.40f, Offset(size.width * 0.85f, size.height * 0.85f))
-            }
-            .padding(12.dp),
-    ) {
-        Image(
-            bitmap = preview,
-            contentDescription = "Preview of the ${kind.label().lowercase()} page of the widget",
-            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+    SectionCard(title = "Preview", subtitle = "Changes reach your home screen automatically.") {
+        // A bright, busy backdrop so transparency is easy to judge.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Brush.linearGradient(listOf(Color(0xFF3A1C71), Color(0xFFD76D77), Color(0xFFFFAF7B))))
+                .drawBehind {
+                    drawCircle(Color(0x66FFFFFF), size.minDimension * 0.35f, Offset(size.width * 0.15f, size.height * 0.2f))
+                    drawCircle(Color(0x5500E5FF), size.minDimension * 0.40f, Offset(size.width * 0.85f, size.height * 0.85f))
+                }
+                .padding(12.dp),
+        ) {
+            Image(
+                bitmap = preview,
+                contentDescription = "Preview of the ${kind.label().lowercase()} page of the widget",
+                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+            )
+        }
+        if (kinds.size > 1) {
+            Segmented(options = kinds.map { it to it.label() }, selected = kind, onSelect = { wanted = it })
+        }
+        Text(
+            "The preview uses sample readings. On the widget the clock keeps itself right between redraws.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(Palette.DIM),
         )
     }
-    if (kinds.size > 1) {
-        Segmented(options = kinds.map { it to it.label() }, selected = kind, onSelect = { wanted = it })
+
+    SectionCard(title = "Look", subtitle = "Colour, solidity and lighting.") {
+        Segmented(
+            options = WidgetTheme.values().map { it to it.label },
+            selected = look.theme,
+            onSelect = { look = look.copy(theme = it); store.save(look) },
+        )
+        Text(
+            "Match system follows your phone, but a widget is a picture: it changes the next time it " +
+                "redraws (within 15 minutes, on a tap, or when you open the app).",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(Palette.DIM),
+        )
+        StyleSlider(
+            label = "Background opacity",
+            value = look.opacity,
+            onChange = { look = look.copy(opacity = it); store.save(look) },
+        )
+        StyleSlider(
+            label = "Glass effect",
+            value = look.glass,
+            onChange = { look = look.copy(glass = it); store.save(look) },
+        )
+        Text(
+            "Lower opacity shows more wallpaper but can make text hard to read on bright backgrounds. " +
+                "Android cannot blur what is behind a widget, so the glass effect is lighting only.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(Palette.DIM),
+        )
+        val lookIsDefault = look.opacity == WidgetStyle.DEFAULT_OPACITY && look.glass == WidgetStyle.DEFAULT_GLASS
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(
+                onClick = {
+                    look = look.copy(opacity = WidgetStyle.DEFAULT_OPACITY, glass = WidgetStyle.DEFAULT_GLASS)
+                    store.save(look)
+                },
+                enabled = !lookIsDefault,
+            ) { Text("Reset look") }
+        }
     }
 
-    SubHeading("Pages")
-    ToggleRow(
-        title = "Clock",
-        subtitle = "Time and date. Tap the widget to flip to it.",
-        checked = look.clock,
-        onChange = { look = look.copy(clock = it); store.save(look) },
-    )
-    ToggleRow(
-        title = "Battery and charging",
-        subtitle = "One page with every connected machine\u2019s battery and charging state, and BAT on the machine page when it has one.",
-        checked = look.battery,
-        onChange = { look = look.copy(battery = it); store.save(look) },
-    )
-
-    SubHeading("Look")
-    Segmented(
-        options = WidgetTheme.values().map { it to it.label },
-        selected = look.theme,
-        onSelect = { look = look.copy(theme = it); store.save(look) },
-    )
-    Text(
-        "Match system follows your phone, but a widget is a picture: it changes the next time it " +
-            "redraws (within 15 minutes, on a tap, or when you open the app).",
-        style = MaterialTheme.typography.bodySmall,
-        color = Color(Palette.DIM),
-    )
-    StyleSlider(
-        label = "Background opacity",
-        value = look.opacity,
-        onChange = { look = look.copy(opacity = it); store.save(look) },
-    )
-    StyleSlider(
-        label = "Glass effect",
-        value = look.glass,
-        onChange = { look = look.copy(glass = it); store.save(look) },
-    )
-
-    Text(
-        "The preview uses sample readings. On the widget the clock shows your phone's time and " +
-            "keeps itself right. Lower opacity shows more wallpaper but can make text hard to read " +
-            "on bright backgrounds. Android cannot blur what is behind a widget, so the glass " +
-            "effect is lighting only.",
-        style = MaterialTheme.typography.bodySmall,
-        color = Color(Palette.DIM),
-    )
-    val lookIsDefault = look.opacity == WidgetStyle.DEFAULT_OPACITY && look.glass == WidgetStyle.DEFAULT_GLASS
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        TextButton(
-            onClick = {
-                look = look.copy(opacity = WidgetStyle.DEFAULT_OPACITY, glass = WidgetStyle.DEFAULT_GLASS)
-                store.save(look)
-            },
-            enabled = !lookIsDefault,
-        ) { Text("Reset look") }
+    SectionCard(title = "Pages", subtitle = "What a tap on the widget cycles through.") {
+        ToggleRow(
+            title = "Clock",
+            subtitle = "Time and date. Tap the widget to flip to it.",
+            checked = look.clock,
+            onChange = { look = look.copy(clock = it); store.save(look) },
+        )
+        ToggleRow(
+            title = "Battery and charging",
+            subtitle = "One page with every connected machine\u2019s battery and charging state, and BAT on the machine page when it has one.",
+            checked = look.battery,
+            onChange = { look = look.copy(battery = it); store.save(look) },
+        )
+        if (look.clock) {
+            // Changing the clock jumps the preview to the clock page, so the effect is there when you scroll up.
+            ClockSettings(
+                zoneId = look.clockZone,
+                hours = look.clockHours,
+                onZone = { look = look.copy(clockZone = it); store.save(look); wanted = PageKind.CLOCK },
+                onHours = { look = look.copy(clockHours = it); store.save(look); wanted = PageKind.CLOCK },
+            )
+        }
     }
 }
 
