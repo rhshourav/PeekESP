@@ -155,7 +155,7 @@ section { padding-block: clamp(56px, 9vw, 104px); }
 /* At 375 px the tagline wrapped to four lines and ran into the repository
    link beside it. It is decoration and the link is not, so the tagline is the
    one that goes. */
-@media (max-width: 560px) { .mast span { display: none; } }
+@media (max-width: 860px) { .mast span { display: none; } }
 .mast a { white-space: nowrap; }
 .mast a { color: var(--ink-mid); text-decoration: none; }
 .mast a:hover { color: var(--ink); }
@@ -370,6 +370,7 @@ figure img {
 
 /* --- derivation ---------------------------------------------------------- */
 pre {
+  max-width: 100%;
   margin: 0;
   background: var(--panel);
   border: 1px solid var(--rule);
@@ -390,6 +391,9 @@ code {
   border-radius: 3px;
   padding: 2px 6px;
   color: var(--ink);
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* --- pages list. Numbered because the carousel genuinely is an order: this
@@ -397,7 +401,7 @@ code {
 .pages { display: flex; flex-direction: column; gap: 0; }
 .page-row {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 18px;
   padding-block: 20px;
   border-top: 1px solid var(--rule);
@@ -472,6 +476,11 @@ code {
 .spec dt.k-stale { color: var(--amber); }
 .spec dt.k-down { color: var(--magenta); }
 .spec dd.wrap-l { text-align: right; max-width: 34ch; }
+code.url { display: inline-block; max-width: 100%; line-height: 1.4; word-break: break-all; vertical-align: baseline; }
+.ha-ver { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font: 400 13px/1.5 var(--f-mono); color: var(--ink-dim); }
+.ha-ver a { color: var(--ink); text-decoration: none; background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; padding: 3px 10px; }
+.ha-ver a:hover { border-color: var(--cyan); color: var(--cyan); }
+.ha-ver [data-gh-date]:empty { display: none; }
 
 /* --- footer -------------------------------------------------------------- */
 footer { padding-block: 44px 60px; }
@@ -879,6 +888,12 @@ read   = SHA-256(<b>"peek-read:"</b>   + CODE)  first 48 hex</pre>
       device, nothing needs to be opened on your network, and no firmware change is
       required.</p>
     </div>
+    <p class="ha-ver">
+      <span data-gh-label>Version</span>
+      <a href="https://github.com/rhshourav/hass-peekesp/releases/latest" data-gh-release="rhshourav/hass-peekesp">v0.1.1</a>
+      <span data-gh-date></span>
+      <span>Home Assistant 2025.1.0 or newer</span>
+    </p>
 
     <div class="ha-states">
       <figure>
@@ -996,7 +1011,7 @@ read   = SHA-256(<b>"peek-read:"</b>   + CODE)  first 48 hex</pre>
             <div class="stack-sm">
               <h3>Add the repository</h3>
               <p>HACS, menu, <em>Custom repositories</em>. Paste
-              <code>https://github.com/rhshourav/hass-peekesp</code> and choose type <em>Integration</em>.</p>
+              <code class="url">https://github.com/rhshourav/hass-peekesp</code> and choose type <em>Integration</em>.</p>
             </div>
           </div>
           <div class="page-row">
@@ -1109,7 +1124,7 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
         </div>
         <div class="cmd">
           <div class="cmd-h">Home Assistant</div>
-          <p>Add <code>https://github.com/rhshourav/hass-peekesp</code> to HACS as a custom <em>Integration</em>, download PeekESP, restart.</p>
+          <p>Add <code class="url">https://github.com/rhshourav/hass-peekesp</code> to HACS as a custom <em>Integration</em>, download PeekESP, restart.</p>
           <p class="caption" style="margin-top:8px">Needs Home Assistant 2025.1.0 or newer. <a href="#home-assistant">More on the card.</a></p>
         </div>
       </div>
@@ -1132,7 +1147,7 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
         <div class="spec"><dt>Worker tests</dt><dd>74 unit &middot; 17 live</dd></div>
         <div class="spec"><dt>Android</dt><dd>8.1 or newer</dd></div>
         <div class="spec"><dt>Home Assistant</dt><dd>2025.1.0 or newer</dd></div>
-        <div class="spec"><dt>HA integration</dt><dd><a href="https://github.com/rhshourav/hass-peekesp" style="text-decoration:none">hass-peekesp</a> &middot; 0.1.1</dd></div>
+        <div class="spec"><dt>HA integration</dt><dd><a href="https://github.com/rhshourav/hass-peekesp" style="text-decoration:none">hass-peekesp</a> &middot; <a href="https://github.com/rhshourav/hass-peekesp/releases/latest" style="text-decoration:none" data-gh-release="rhshourav/hass-peekesp">v0.1.1</a></dd></div>
         <div class="spec"><dt>Release</dt><dd>v1.2.1</dd></div>
         <div class="spec"><dt>Licence</dt><dd>MIT</dd></div>
       </dl>
@@ -1378,6 +1393,61 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
 
   device.classList.add("has-js");
   paint(0);
+})();
+</script>
+
+<script>
+/* Latest release of the Home Assistant integration, read from GitHub so the page
+ * cannot go stale the way a typed-in version number does. The number already in
+ * the markup is the fallback: it is what the repository's README documents, and
+ * it stays if the request fails, is rate-limited (60 an hour per address,
+ * unauthenticated) or the repository has no published release yet. The answer is
+ * kept for an hour in sessionStorage so a reload does not spend the budget. */
+(function () {
+  "use strict";
+  if (!window.fetch) return;
+  var repos = {};
+  Array.prototype.forEach.call(document.querySelectorAll("[data-gh-release]"), function (el) {
+    repos[el.getAttribute("data-gh-release")] = 1;
+  });
+
+  function show(repo, rel) {
+    if (!rel || typeof rel.tag_name !== "string" || !/^[\w.+-]{1,24}$/.test(rel.tag_name)) return;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-gh-release="' + repo + '"]'), function (el) {
+      el.textContent = rel.tag_name;
+      if (el.tagName === "A" && /^https:\/\/github\.com\//.test(rel.html_url || "")) el.href = rel.html_url;
+    });
+    // The label only claims "Latest release" once GitHub has actually said so.
+    Array.prototype.forEach.call(document.querySelectorAll("[data-gh-label]"), function (el) {
+      el.textContent = "Latest release";
+    });
+    var d = new Date(rel.published_at);
+    if (!isNaN(d)) {
+      Array.prototype.forEach.call(document.querySelectorAll("[data-gh-date]"), function (el) {
+        el.textContent = "published " + d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+      });
+    }
+  }
+
+  Object.keys(repos).forEach(function (repo) {
+    var key = "peekesp-release:" + repo, cached = null;
+    try { cached = JSON.parse(sessionStorage.getItem(key) || "null"); } catch (e) {}
+    if (cached && Date.now() - cached.t < 3600000) { show(repo, cached.rel); return; }
+    fetch("https://api.github.com/repos/" + repo + "/releases/latest", {
+      headers: { Accept: "application/vnd.github+json" }
+    }).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (rel) {
+        if (!rel) return;
+        show(repo, rel);
+        try {
+          sessionStorage.setItem(key, JSON.stringify({
+            t: Date.now(),
+            rel: { tag_name: rel.tag_name, html_url: rel.html_url, published_at: rel.published_at }
+          }));
+        } catch (e) {}
+      })
+      .catch(function () { /* the fallback already on the page stands */ });
+  });
 })();
 </script>
 
