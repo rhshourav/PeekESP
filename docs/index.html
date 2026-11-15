@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PeekESP - live system metrics on an ESP32 display or your Android home screen</title>
-<meta name="description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT. Android app and home-screen widget included.">
+<meta name="description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT. Android app, home-screen widget and Home Assistant integration included.">
 <link rel="canonical" href="https://rhshourav.github.io/PeekESP/">
 <meta name="theme-color" content="#05070E">
 
@@ -16,14 +16,14 @@
 <meta property="og:site_name" content="PeekESP">
 <meta property="og:url" content="https://rhshourav.github.io/PeekESP/">
 <meta property="og:title" content="PeekESP - live metrics for a server 250 km away">
-<meta property="og:description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT. Android app and home-screen widget included.">
+<meta property="og:description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT. Android app, home-screen widget and Home Assistant integration included.">
 <meta property="og:image" content="https://rhshourav.github.io/PeekESP/og.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="The PeekESP dashboard running on a LilyGO TTGO T-Display.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="PeekESP - live metrics for a server 250 km away">
-<meta name="twitter:description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT. Android app and home-screen widget included.">
+<meta name="twitter:description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT. Android app, home-screen widget and Home Assistant integration included.">
 <meta name="twitter:image" content="https://rhshourav.github.io/PeekESP/og.jpg">
 
 <link rel="icon" href="favicon.ico" sizes="any">
@@ -451,6 +451,28 @@ code {
 .caveat h3 { color: var(--ink); margin-bottom: 6px; }
 .caveat p { color: var(--ink-mid); font-size: 15px; }
 
+/* --- masthead nav, Home Assistant ----------------------------------------- */
+.mast-nav { display: flex; align-items: center; gap: 24px; }
+@media (max-width: 560px) { .mast .mast-ha { display: none; } }
+
+/* The card states are drawn with the firmware's own palette. Colour classes come
+   after .big so that a coloured reading beats the default ink. */
+.ha-states { display: grid; gap: 22px 18px; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); margin-top: 12px; }
+.ha-svg { display: block; width: 100%; height: auto; }
+.ha-svg text { font: 400 9px var(--f-display); fill: var(--ink-dim); }
+.ha-svg .big { font-size: 17px; font-weight: 600; fill: var(--ink); }
+.ha-svg .b { font-weight: 600; }
+.ha-svg .ink { fill: var(--ink); }
+.ha-svg .cy { fill: var(--cyan); }
+.ha-svg .am { fill: var(--amber); }
+.ha-svg .gr { fill: var(--green); }
+.ha-svg .trk { fill: none; stroke: #1A2334; stroke-width: 6; stroke-linecap: round; }
+.ha-svg .ind { fill: none; stroke-width: 6; stroke-linecap: round; stroke-dasharray: 141.4; }
+.spec dt.k-ok { color: var(--green); }
+.spec dt.k-stale { color: var(--amber); }
+.spec dt.k-down { color: var(--magenta); }
+.spec dd.wrap-l { text-align: right; max-width: 34ch; }
+
 /* --- footer -------------------------------------------------------------- */
 footer { padding-block: 44px 60px; }
 .foot {
@@ -470,7 +492,10 @@ footer { padding-block: 44px 60px; }
 <div class="wrap">
   <header class="mast">
     <div><b>PEEK</b> <span>// system metrics, on a desk</span></div>
-    <a href="https://github.com/rhshourav/PeekESP">github.com/rhshourav/PeekESP</a>
+    <nav class="mast-nav">
+      <a class="mast-ha" href="#home-assistant">Home Assistant</a>
+      <a href="https://github.com/rhshourav/PeekESP">github.com/rhshourav/PeekESP</a>
+    </nav>
   </header>
 </div>
 <hr class="rule">
@@ -495,7 +520,7 @@ footer { padding-block: 44px 60px; }
         <a class="btn btn-ghost" href="https://github.com/rhshourav/PeekESP/releases">Download v1.2.1</a>
         <a class="btn btn-ghost" href="#android">Android app</a>
       </div>
-      <p class="caption">Arduino + LVGL &middot; Android &middot; Cloudflare Worker &middot; MIT licensed</p>
+      <p class="caption">Arduino + LVGL &middot; Android &middot; <a href="#home-assistant">Home Assistant</a> &middot; Cloudflare Worker &middot; MIT licensed</p>
     </div>
 
     <div class="screen-figure">
@@ -796,7 +821,7 @@ read   = SHA-256(<b>"peek-read:"</b>   + CODE)  first 48 hex</pre>
       <h2>The same readings on your home screen.</h2>
       <div class="prose stack-sm">
         <p>The Android app reads the same relay with the same code, so a phone, a
-        desk display and Home Assistant can all watch the same machines at once.
+        desk display and <a href="#home-assistant">Home Assistant</a> can all watch the same machines at once.
         <strong style="color:var(--ink)">The ESP32 is optional.</strong></p>
       </div>
       <div class="prose stack-sm" style="margin-top:6px">
@@ -840,6 +865,215 @@ read   = SHA-256(<b>"peek-read:"</b>   + CODE)  first 48 hex</pre>
 
 <hr class="rule">
 
+<!-- ===================== HOME ASSISTANT ===================== -->
+<section id="home-assistant">
+  <div class="wrap stack">
+    <p class="eyebrow">In Home Assistant</p>
+    <h2 class="prose">The device&rsquo;s own screen, on a dashboard.</h2>
+    <div class="prose stack-sm">
+      <p class="lede">The <a href="https://github.com/rhshourav/hass-peekesp">hass-peekesp</a> integration turns each
+      PeekESP machine into Home Assistant entities and adds a Lovelace card that draws
+      <strong>the screen itself</strong>: same palette, same layout, same gauges, same
+      load colours, same 500&nbsp;ms sweep.</p>
+      <p>It reads the same Cloudflare relay the ESP32 reads. Nothing is added to the
+      device, nothing needs to be opened on your network, and no firmware change is
+      required.</p>
+    </div>
+
+    <div class="ha-states">
+      <figure>
+        <div class="screen">
+        <svg class="ha-svg" viewBox="0 0 240 135" role="img" aria-label="Card, healthy: kushtia-server, CPU 42 percent, RAM 78 percent, link OK.">
+          <rect width="240" height="135" fill="#05070E"/>
+          <text class="cy b" x="8" y="12">PEEK</text>
+          <text x="44" y="12">// kushtia-server</text>
+          <text x="206" y="12" text-anchor="end">42 ms</text>
+          <circle cx="227" cy="10" r="5" fill="#35D07F"/>
+          <rect x="8" y="19" width="224" height="1" fill="#00E5FF" opacity=".3"/>
+          <g>
+            <path class="trk" d="M 17.79 77.21 A 30 30 0 1 1 60.21 77.21"/>
+            <path class="ind" stroke="#00E5FF" stroke-dashoffset="82.0" d="M 17.79 77.21 A 30 30 0 1 1 60.21 77.21"/>
+            <text class="big" x="39" y="51" text-anchor="middle" dominant-baseline="central">42</text>
+            <text x="39" y="70" text-anchor="middle" dominant-baseline="central">CPU %</text>
+            <path class="trk" d="M 89.79 77.21 A 30 30 0 1 1 132.21 77.21"/>
+            <path class="ind" stroke="#FF2E7E" stroke-dashoffset="31.1" d="M 89.79 77.21 A 30 30 0 1 1 132.21 77.21"/>
+            <text class="big" x="111" y="51" text-anchor="middle" dominant-baseline="central">78</text>
+            <text x="111" y="70" text-anchor="middle" dominant-baseline="central">RAM %</text>
+            <rect x="150" y="23" width="84" height="66" rx="6" fill="#0B1220" stroke="#1A2334"/>
+            <text x="154" y="34">TEMP</text>
+            <text class="big " x="154" y="53">48&#176;</text>
+            <text x="154" y="74">RX 1.3M</text>
+            <text x="154" y="85">TX 113k</text>
+            <text x="8" y="99">STORAGE&#160;&#160;436G FREE</text>
+            <text class="ink" x="232" y="99" text-anchor="end">61%</text>
+            <rect x="7" y="108" width="226" height="8" rx="4" fill="#1A2334"/>
+            <rect x="7" y="108" width="138" height="8" rx="4" fill="#00E5FF"/>
+          </g>
+          <text x="8" y="126">up 3d 4h</text>
+          <text class="gr" x="232" y="126" text-anchor="end">LINK OK</text>
+        </svg>
+        </div>
+        <figcaption class="caption"><b style="color:var(--green);font-weight:500">LINK OK</b> &mdash; the relay heard from the machine inside the offline window.</figcaption>
+      </figure>
+      <figure>
+        <div class="screen">
+        <svg class="ha-svg" viewBox="0 0 240 135" role="img" aria-label="Card, loaded: dhaka-laptop, CPU 91 percent, temperature 71 degrees in amber, storage 93 percent full in red.">
+          <rect width="240" height="135" fill="#05070E"/>
+          <text class="cy b" x="8" y="12">PEEK</text>
+          <text x="44" y="12">// dhaka-laptop</text>
+          <text x="206" y="12" text-anchor="end">18 ms</text>
+          <circle cx="227" cy="10" r="5" fill="#35D07F"/>
+          <rect x="8" y="19" width="224" height="1" fill="#00E5FF" opacity=".3"/>
+          <g>
+            <path class="trk" d="M 17.79 77.21 A 30 30 0 1 1 60.21 77.21"/>
+            <path class="ind" stroke="#00E5FF" stroke-dashoffset="12.7" d="M 17.79 77.21 A 30 30 0 1 1 60.21 77.21"/>
+            <text class="big" x="39" y="51" text-anchor="middle" dominant-baseline="central">91</text>
+            <text x="39" y="70" text-anchor="middle" dominant-baseline="central">CPU %</text>
+            <path class="trk" d="M 89.79 77.21 A 30 30 0 1 1 132.21 77.21"/>
+            <path class="ind" stroke="#FF2E7E" stroke-dashoffset="63.6" d="M 89.79 77.21 A 30 30 0 1 1 132.21 77.21"/>
+            <text class="big" x="111" y="51" text-anchor="middle" dominant-baseline="central">55</text>
+            <text x="111" y="70" text-anchor="middle" dominant-baseline="central">RAM %</text>
+            <rect x="150" y="23" width="84" height="66" rx="6" fill="#0B1220" stroke="#1A2334"/>
+            <text x="154" y="34">TEMP</text>
+            <text class="big am" x="154" y="53">71&#176;</text>
+            <text x="154" y="74">RX 88k</text>
+            <text x="154" y="85">TX 21k</text>
+            <text x="8" y="99">STORAGE&#160;&#160;33G FREE</text>
+            <text class="ink" x="232" y="99" text-anchor="end">93%</text>
+            <rect x="7" y="108" width="226" height="8" rx="4" fill="#1A2334"/>
+            <rect x="7" y="108" width="210" height="8" rx="4" fill="#FF4D6D"/>
+          </g>
+          <text x="8" y="126">up 2h 35m</text>
+          <text class="gr" x="232" y="126" text-anchor="end">LINK OK</text>
+        </svg>
+        </div>
+        <figcaption class="caption">Loaded. Temperature and storage change colour as they climb, exactly as on the board.</figcaption>
+      </figure>
+      <figure>
+        <div class="screen">
+        <svg class="ha-svg" viewBox="0 0 240 135" role="img" aria-label="Card, stale: nas, readings dimmed, STALE in amber, offline for 3 minutes.">
+          <rect width="240" height="135" fill="#05070E"/>
+          <text class="cy b" x="8" y="12">PEEK</text>
+          <text x="44" y="12">// nas</text>
+          <text x="206" y="12" text-anchor="end">38 ms</text>
+          <circle cx="227" cy="10" r="5" fill="#FFB020"/>
+          <rect x="8" y="19" width="224" height="1" fill="#00E5FF" opacity=".3"/>
+          <g opacity=".45">
+            <path class="trk" d="M 17.79 77.21 A 30 30 0 1 1 60.21 77.21"/>
+            <path class="ind" stroke="#00E5FF" stroke-dashoffset="131.5" d="M 17.79 77.21 A 30 30 0 1 1 60.21 77.21"/>
+            <text class="big" x="39" y="51" text-anchor="middle" dominant-baseline="central">7</text>
+            <text x="39" y="70" text-anchor="middle" dominant-baseline="central">CPU %</text>
+            <path class="trk" d="M 89.79 77.21 A 30 30 0 1 1 132.21 77.21"/>
+            <path class="ind" stroke="#FF2E7E" stroke-dashoffset="93.3" d="M 89.79 77.21 A 30 30 0 1 1 132.21 77.21"/>
+            <text class="big" x="111" y="51" text-anchor="middle" dominant-baseline="central">34</text>
+            <text x="111" y="70" text-anchor="middle" dominant-baseline="central">RAM %</text>
+            <rect x="150" y="23" width="84" height="66" rx="6" fill="#0B1220" stroke="#1A2334"/>
+            <text x="154" y="34">TEMP</text>
+            <text class="big " x="154" y="53">41&#176;</text>
+            <text x="154" y="74">RX 12k</text>
+            <text x="154" y="85">TX 4k</text>
+            <text x="8" y="99">STORAGE&#160;&#160;1.2T FREE</text>
+            <text class="ink" x="232" y="99" text-anchor="end">72%</text>
+            <rect x="7" y="108" width="226" height="8" rx="4" fill="#1A2334"/>
+            <rect x="7" y="108" width="163" height="8" rx="4" fill="#00E5FF"/>
+          </g>
+          <text x="8" y="126">offline 3m</text>
+          <text class="am" x="232" y="126" text-anchor="end">STALE</text>
+        </svg>
+        </div>
+        <figcaption class="caption"><b style="color:var(--amber);font-weight:500">STALE</b> &mdash; the relay answers but the machine stopped pushing. Readings dim and the age is shown.</figcaption>
+      </figure>
+    </div>
+    <p class="caption prose">Redrawn for this page from the card&rsquo;s palette and layout at the panel&rsquo;s
+    240&nbsp;&times;&nbsp;135. They are not screenshots from a running Home Assistant.</p>
+
+    <div class="hero-grid" style="margin-top:28px">
+      <div class="stack">
+        <h3>Install with HACS</h3>
+        <div class="pages">
+          <div class="page-row">
+            <div class="page-n">01</div>
+            <div class="stack-sm">
+              <h3>Add the repository</h3>
+              <p>HACS, menu, <em>Custom repositories</em>. Paste
+              <code>https://github.com/rhshourav/hass-peekesp</code> and choose type <em>Integration</em>.</p>
+            </div>
+          </div>
+          <div class="page-row">
+            <div class="page-n">02</div>
+            <div class="stack-sm">
+              <h3>Download and restart</h3>
+              <p>Download <strong style="color:var(--ink)">PeekESP</strong>, then restart Home Assistant.
+              Without HACS, copy <code>custom_components/peekesp</code> into your config folder and restart.</p>
+            </div>
+          </div>
+          <div class="page-row">
+            <div class="page-n">03</div>
+            <div class="stack-sm">
+              <h3>Add the integration</h3>
+              <p><em>Settings &rarr; Devices &amp; services &rarr; Add integration &rarr; PeekESP.</em>
+              Enter the pairing code your agent was set up with; dashes are optional. A relay URL
+              and token are only for a named or private stream. Machines appear on their own the
+              first time they report.</p>
+            </div>
+          </div>
+          <div class="page-row">
+            <div class="page-n">04</div>
+            <div class="stack-sm">
+              <h3>Add the card</h3>
+              <p>It loads automatically. Pick <em>PeekESP screen</em> in the card picker, or use YAML,
+              one card per machine:</p>
+              <pre>type: custom:peekesp-card
+entity: sensor.dietpi_screen
+name: Pi            <span class="c"># optional, replaces the host name after "//"</span></pre>
+            </div>
+          </div>
+        </div>
+        <div class="cta-row" style="margin-top:6px">
+          <a class="btn btn-primary" href="https://my.home-assistant.io/redirect/hacs_repository/?owner=rhshourav&repository=hass-peekesp&category=integration">Open in HACS</a>
+          <a class="btn btn-ghost" href="https://github.com/rhshourav/hass-peekesp">Source</a>
+        </div>
+        <p class="caption">For a wall of machines, put the cards in a grid:</p>
+        <pre>type: grid
+columns: 2
+square: false
+cards:
+  - { type: custom:peekesp-card, entity: sensor.dietpi_screen }
+  - { type: custom:peekesp-card, entity: sensor.nas_screen }</pre>
+      </div>
+
+      <div class="stack">
+        <h3>How the card tells you what is wrong</h3>
+        <dl class="specs" style="grid-template-columns:1fr">
+          <div class="spec"><dt class="k-ok">LINK OK</dt><dd class="wrap-l">the relay heard from the machine within the offline window</dd></div>
+          <div class="spec"><dt class="k-stale">STALE</dt><dd class="wrap-l">relay reachable, machine stopped pushing; shows <code>offline 3m</code></dd></div>
+          <div class="spec"><dt class="k-down">NO LINK</dt><dd class="wrap-l">Home Assistant cannot reach the relay; last values stay, dimmed</dd></div>
+        </dl>
+
+        <h3 style="margin-top:14px">What you get</h3>
+        <dl class="specs" style="grid-template-columns:1fr">
+          <div class="spec"><dt>Per machine</dt><dd class="wrap-l">CPU, RAM, storage used / free / total, temperature, download, upload, uptime</dd></div>
+          <div class="spec"><dt>If it reports one</dt><dd class="wrap-l">battery and charging</dd></div>
+          <div class="spec"><dt>Also</dt><dd class="wrap-l">a Reporting sensor, and the Screen sensor the card reads</dd></div>
+          <div class="spec"><dt>Relay device</dt><dd class="wrap-l">latency, newest firmware version</dd></div>
+          <div class="spec"><dt>Poll interval</dt><dd>10 s, minimum 5</dd></div>
+          <div class="spec"><dt>Mark offline after</dt><dd>30 s</dd></div>
+          <div class="spec"><dt>Requires</dt><dd>Home Assistant 2025.1.0+</dd></div>
+        </dl>
+
+        <p class="caption">The device polls the same Worker every 5&nbsp;s, so every Home Assistant
+        poll counts against the same request quota. The Screen sensor changes on every poll; if
+        database size matters, exclude <code>sensor.*_screen</code> from the recorder.</p>
+        <p class="caption">Where it differs from the glass: the throughput line shrinks, never
+        below 9&nbsp;px, instead of clipping; the ping is Home Assistant&rsquo;s round trip to the
+        relay, not the device&rsquo;s; Montserrat is used if installed, otherwise the system sans-serif.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule">
+
 <!-- ===================== INSTALL ===================== -->
 <section>
   <div class="wrap hero-grid">
@@ -873,6 +1107,11 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
           <p class="caption" style="margin-top:8px">Needs Android 8.1 or newer. Not on
           Google Play yet. <a href="#android">More on the app.</a></p>
         </div>
+        <div class="cmd">
+          <div class="cmd-h">Home Assistant</div>
+          <p>Add <code>https://github.com/rhshourav/hass-peekesp</code> to HACS as a custom <em>Integration</em>, download PeekESP, restart.</p>
+          <p class="caption" style="margin-top:8px">Needs Home Assistant 2025.1.0 or newer. <a href="#home-assistant">More on the card.</a></p>
+        </div>
       </div>
     </div>
 
@@ -892,6 +1131,8 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
         <div class="spec"><dt>WiFi networks</dt><dd>5</dd></div>
         <div class="spec"><dt>Worker tests</dt><dd>74 unit &middot; 17 live</dd></div>
         <div class="spec"><dt>Android</dt><dd>8.1 or newer</dd></div>
+        <div class="spec"><dt>Home Assistant</dt><dd>2025.1.0 or newer</dd></div>
+        <div class="spec"><dt>HA integration</dt><dd><a href="https://github.com/rhshourav/hass-peekesp" style="text-decoration:none">hass-peekesp</a> &middot; 0.1.1</dd></div>
         <div class="spec"><dt>Release</dt><dd>v1.2.1</dd></div>
         <div class="spec"><dt>Licence</dt><dd>MIT</dd></div>
       </dl>
@@ -918,7 +1159,7 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
       <div class="caveat">
         <h3>The free tier is a request budget, not a device count</h3>
         <p>Each agent costs 17,280 requests a day at a five-second interval, and so
-        does each display &mdash; and each phone or widget that polls &mdash; against Cloudflare&rsquo;s 100,000. One display and two
+        does each display &mdash; and each phone, widget or Home Assistant instance that polls &mdash; against Cloudflare&rsquo;s 100,000. One display and two
         machines fits comfortably; four is close to the edge. Raising the interval to
         15&nbsp;s divides everything by three.</p>
       </div>
@@ -943,6 +1184,14 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
         so new firmware means a USB cable &mdash; fine for a display on your desk,
         which is where this one lives.</p>
       </div>
+      <div class="caveat">
+        <h3>The Home Assistant integration is early</h3>
+        <p>Version 0.1.1 is checked against the pairing vector pinned in the firmware, payload
+        parsing, a fake relay, and the card&rsquo;s rendering outside a browser. It has not been
+        run inside a real Home Assistant, and the card has not been seen in a real browser. It
+        follows the current APIs (2025.1 and newer), so expect rough edges and
+        <a href="https://github.com/rhshourav/hass-peekesp/issues">report them</a>.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -956,6 +1205,7 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
       <a href="https://github.com/rhshourav/PeekESP">Source</a>
       <a href="https://github.com/rhshourav/PeekESP/releases">Releases</a>
       <a href="https://github.com/rhshourav/PeekESP/releases/latest">Android APK</a>
+      <a href="https://github.com/rhshourav/hass-peekesp">Home Assistant</a>
       <a href="https://github.com/rhshourav/PeekESP/wiki">Wiki</a>
       <a href="https://github.com/rhshourav/PeekESP/issues">Issues</a>
     </nav>
