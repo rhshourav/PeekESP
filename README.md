@@ -13,6 +13,7 @@ Peek Essential Status Panel
 ![license](https://img.shields.io/badge/license-MIT-5C6B82?style=flat-square)
 ![worker CI](https://img.shields.io/github/actions/workflow/status/rhshourav/PeekESP/cloudflare-worker.yml?style=flat-square&label=worker%20CI)
 ![release](https://img.shields.io/github/v/release/rhshourav/PeekESP?style=flat-square&color=8CC63F)
+[![Discord](https://img.shields.io/badge/Discord-join_the_community-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/nHtHMmjzRU)
 [![Listed on ESP32 Gallery](https://esp32gallery.com/badge.svg)](https://esp32gallery.com/projects/rhshourav-peekesp/)
 
 <img src="img/dashboard.jpeg" alt="PeekESP running on a TTGO T-Display, showing CPU, RAM, storage and network for a machine called Cryo-PC" width="720">
@@ -32,6 +33,8 @@ PeekESP brings remote system metrics to Android, dedicated ESP32 displays, deskt
 | Use a Raspberry Pi and a small screen | [Raspberry Pi](#a-raspberry-pi-instead-of-an-esp32) |
 | See machines in Home Assistant | [Home Assistant](#home-assistant) |
 | Monitor one more machine | [Setup → the agent](#1-on-the-host--the-telemetry-agent) |
+| Understand how the pieces fit together | [How it all connects](#how-it-all-connects) |
+| Ask a question, or show off my build | [Discord](https://discord.gg/nHtHMmjzRU) |
 
 | Platform | Role | Status |
 |---|---|---|
@@ -47,6 +50,7 @@ PeekESP brings remote system metrics to Android, dedicated ESP32 displays, deskt
 <details>
 <summary><b>Contents</b></summary>
 
+- [How it all connects](#how-it-all-connects)
 - [Android app](#android-app)
 - [Quick start](#quick-start)
 - [What's in here](#whats-in-here)
@@ -64,10 +68,80 @@ PeekESP brings remote system metrics to Android, dedicated ESP32 displays, deskt
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
 - [Privacy and security](#privacy-and-security)
+- [Community](#community)
 - [Contributing](#contributing)
 - [License](#license)
 
 </details>
+
+## How it all connects
+
+Three kinds of piece, one relay in the middle, and one pairing code that ties them together.
+
+```mermaid
+flowchart LR
+    agents["<b>Agents</b> on the machines you watch<br/>Windows · Linux / DietPi · macOS · Raspberry Pi"]
+    relay[("<b>PeekESP relay</b><br/>holds the latest reading<br/>of each machine")]
+    esp["<b>ESP32 display</b><br/>TTGO T-Display and other panels"]
+    pid["<b>Raspberry Pi display</b><br/>TFT, OLED, e-paper, LCD, LED matrix"]
+    phone["<b>Android app and widget</b>"]
+    ha["<b>Home Assistant</b><br/>sensors, display buttons, Lovelace card"]
+
+    agents -->|"push"| relay
+    relay -->|"poll"| esp
+    relay -->|"poll"| pid
+    relay -->|"poll"| phone
+    relay -->|"poll"| ha
+    ha -.->|"display commands"| relay
+```
+
+Nothing in that picture accepts an inbound connection. Every arrow is a machine
+or a client dialling **out** to the relay, which is why it works behind CGNAT, on
+a network you don't administer, and without a VPN or a port forward
+([why](#why-a-relay)). A Raspberry Pi can sit at both ends at once: run the
+agent on it and it shows up in its own display's carousel.
+
+| Piece | What it does | How it talks to the relay | How often |
+|---|---|---|---|
+| **Agents** — Windows, Linux / DietPi, macOS, Raspberry Pi | Report one machine's CPU, RAM, storage, temperature, battery and network | Push | Every 5 s by default; `sudo peekesp set interval 15` slows it |
+| **ESP32 display** | Shows every machine, one page at a time | Poll | Every 5 s by default |
+| **Raspberry Pi display** | The same dashboard on a Pi screen | Poll | See [pi/](pi/) |
+| **Android app and widget** | Shows every machine on your phone | Poll | Every 5 s while the app is open; the widget about every 15 minutes in the background, the fastest Android allows |
+| **Home Assistant** | One device per machine, plus buttons that drive the display | Poll, and display commands back through the relay | Every 10 s by default, 5 s at the fastest |
+
+### One code connects them
+
+No piece is configured to talk to another. Each one is given the **same
+ten-character pairing code** and derives from it, locally, which stream to use
+and which tokens to present:
+
+```
+stream = SHA-256("peek-stream:" + CODE)  first 16 hex
+push   = SHA-256("peek-push:"   + CODE)  first 48 hex
+read   = SHA-256("peek-read:"   + CODE)  first 48 hex
+```
+
+Agents use the push token; a viewer only needs the read token, and the Android
+app derives nothing more, so it cannot forge a reading. The relay never sees the
+code. Because the code identifies *you* rather than a machine, you add a machine
+by running an agent with the code you already have, and you add a place to look
+by typing the same code into another display, phone or Home Assistant — nothing
+already paired needs touching. Up to six machines per code.
+
+### Where the relay runs
+
+The relay is a small service that keeps the latest reading of each machine and
+nothing else. The public default, `https://peek-relay-b9a8.onrender.com`, runs on
+Render's free tier, and the Android app uses it unless told otherwise. Free
+instances sleep when idle and forget their readings when restarted, so the first
+poll after a quiet spell can be slow and a display may read `NO LINK` briefly;
+machines reappear within seconds as the agents push again.
+
+You can run your own — on Render ([render.yaml](render.yaml), [relay/](relay/))
+or as a Cloudflare Worker ([cloudflare/](cloudflare/), steps in
+[Deploy the relay](#2-deploy-the-relay)) — but every agent, display and viewer
+must then use the **same** relay, or each one sees an empty stream. What happens
+*inside* the firmware is a separate story: see [Architecture](#architecture).
 
 ## Android app
 
@@ -775,6 +849,11 @@ cable is moved.
 | Everything goes quiet part-way through the day | The free-tier request quota is probably spent. Count agents, displays and phones against 100k/day — see [Deploy the relay](#2-deploy-the-relay) — and raise the interval. |
 | Windows app says it isn't pushing | The code was mistyped, or the machine can't reach the relay URL shown in Settings. Re-enter the code, then **Save**. |
 
+Still stuck? Ask on the [PeekESP Discord](https://discord.gg/nHtHMmjzRU) or
+[open an issue](https://github.com/rhshourav/PeekESP/issues). Leave your pairing
+code out of both, including screenshots and serial logs: it is the credential,
+and both places are public.
+
 ## FAQ
 
 **Do I need an ESP32?** No. The Android app, a Raspberry Pi display and Home Assistant all work without one.
@@ -787,17 +866,36 @@ cable is moved.
 
 **Why not Tailscale or WireGuard?** See [Why a relay](#why-a-relay).
 
+**Where can I ask for help?** On the [PeekESP Discord](https://discord.gg/nHtHMmjzRU) for questions and builds, or in [GitHub issues](https://github.com/rhshourav/PeekESP/issues) for bugs. See [Community](#community).
+
 ## Privacy and security
 
 - **The relay never sees your pairing code.** The stream and tokens are derived from it locally on every client.
 - **What leaves your machine:** the fields in the [telemetry contract](#telemetry-contract) — host name, CPU, RAM, storage, temperature, battery, uptime and network rates. The relay keeps the latest reading per host and drops a host after 24 hours of silence.
 - **The setup page is plain HTTP.** The limits are spelled out under [Configuration](#configuration); read them before enabling the settings page on your network.
 - **Android:**
-- **Reporting a vulnerability:**
+- **Reporting a vulnerability:** please don't open a public issue or post in Discord. Use GitHub's private reporting instead: the repository's **Security** tab → **Report a vulnerability**.
+
+## Community
+
+Questions, builds, panel reports and half-formed ideas are all welcome on the
+**[PeekESP Discord](https://discord.gg/nHtHMmjzRU)**. Bugs and feature requests
+still belong in [GitHub issues](https://github.com/rhshourav/PeekESP/issues),
+where they can be tracked and tied to the fix that closes them.
+
+Both places are public, so two rules:
+
+- **Never post your pairing code.** It is the credential: anyone who has it can
+  read your machines' readings. Crop it out of screenshots and serial logs.
+- **Report security problems privately,** not in Discord and not in an issue.
+  See [Privacy and security](#privacy-and-security).
+
+The most useful thing you can post is a hardware report: that another panel
+works, or doesn't, and what you had to change.
 
 ## Contributing
 
-Issues and pull requests are welcome. Hardware reports are especially useful: only the T-Display has run on hardware so far, so a note that another panel works (or doesn't) helps everyone.
+Issues and pull requests are welcome. Hardware reports are especially useful, in an issue or on [Discord](https://discord.gg/nHtHMmjzRU): only the T-Display has run on hardware so far, so a note that another panel works (or doesn't) helps everyone.
 
 Before opening a pull request:
 
