@@ -1,0 +1,77 @@
+--- a/PeekESP/PeekESP.ino
++++ b/PeekESP/PeekESP.ino
+@@ -154,6 +154,10 @@
+ // The two storage_*_gb fields arrived after 1.0.0. An older agent simply omits
+ // them, and the display falls back to the percentage alone rather than showing
+ // "0 GB free" - which would read as a full disk instead of a missing field.
++//
++// NAS hosts (synology/peek-agent-synology.py) may also send
++//   "raid_degraded": true     an array has lost a drive and is not protected
++// Every other host omits it, which reads as false - nothing changes for them.
+ 
+ // ============================================================================
+ //  Palette + geometry
+@@ -218,6 +222,7 @@
+   int16_t  battery_minutes  = -1;     // <0 = the OS would not estimate
+   bool     battery_charging = false;
+   bool     battery_ac       = false;
++  bool     raid_degraded    = false;  // NAS only: an md array has lost redundancy
+   float    rx_kbps         = 0;
+   float    tx_kbps         = 0;
+   uint32_t uptime_seconds  = 0;
+@@ -798,6 +803,21 @@
+   sweep(g_bar, bar_anim_cb, g_bar_shown, target);
+ }
+ 
++// A degraded array is the one storage fact worth interrupting someone for, so it
++// overrides the cyan-to-magenta bar instead of sitting politely beside it. Solid
++// red needs the gradient end changed too: the bar fades to magenta, and setting
++// only the start colour would leave a red-to-pink bar that reads as "busy", not
++// "broken". Called after bar_set(), and restores the gradient when it clears, so
++// a host that stops reporting the fault goes back to looking normal.
++static void storage_alarm(bool degraded) {
++  if (degraded) {
++    lv_obj_set_style_bg_color(g_bar, COL_RED, LV_PART_INDICATOR);
++    lv_obj_set_style_bg_grad_color(g_bar, COL_RED, LV_PART_INDICATOR);
++  } else {
++    lv_obj_set_style_bg_grad_color(g_bar, COL_MAGENTA, LV_PART_INDICATOR);
++  }
++}
++
+ // ---------------------------------------------------------------------------
+ //  Status dot: a "radar ping" - the dot brightens while a ring expands out of
+ //  it and fades. Outline instead of a shadow, because outlines need no blur
+@@ -1705,16 +1725,24 @@
+   gauge_set(&g_cpu, snap.cpu_percent);
+   gauge_set(&g_ram, snap.ram_percent);
+   bar_set(snap.storage_percent);
++  storage_alarm(snap.raid_degraded);
+ 
+   char buf[48], a[12], b[12];
+ 
+-  if (snap.storage_total_gb > 0) {
++  // The caption gives up its free-space figure to say the one thing that matters.
++  // "RAID DEGRADED" is shorter than "STORAGE  906G FREE", so it fits the 150 px
++  // this label is clipped to, and the percentage beside it still shows how full
++  // the volume is.
++  if (snap.raid_degraded) {
++    snprintf(buf, sizeof buf, "RAID DEGRADED");
++  } else if (snap.storage_total_gb > 0) {
+     fmt_capacity(a, sizeof a, snap.storage_free_gb);
+     snprintf(buf, sizeof buf, "STORAGE  %s FREE", a);
+   } else {
+     snprintf(buf, sizeof buf, "STORAGE");
+   }
+   lv_label_set_text(g_lbl_store, buf);
++  lv_obj_set_style_text_color(g_lbl_store, snap.raid_degraded ? COL_RED : COL_TEXT_DIM, 0);
+ 
+   if (snap.cpu_temp_c >= 0) snprintf(buf, sizeof buf, "%.0f\xC2\xB0", snap.cpu_temp_c);
+   else                      snprintf(buf, sizeof buf, "--");
+@@ -2065,6 +2093,7 @@
+   out.battery_minutes  = o["battery_minutes"]  | -1;
+   out.battery_charging = o["battery_charging"] | false;
+   out.battery_ac       = o["battery_ac"]       | false;
++  out.raid_degraded    = o["raid_degraded"]    | false;   // absent on non-NAS hosts
+   out.rx_kbps          = o["net_rx_kbps"]      | 0.0f;
+   out.tx_kbps          = o["net_tx_kbps"]      | 0.0f;
+   out.uptime_seconds   = o["uptime_seconds"]   | 0u;

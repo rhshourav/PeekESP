@@ -1,0 +1,88 @@
+# PeekESP agent for Synology - Container Manager (DSM 7.2) / Docker (DSM 7.0-7.1).
+#
+# Container Manager > Project > Create > set the path to the folder holding this file,
+# the Dockerfile and peek-agent-synology.py, paste your pairing code below, and start it.
+# Or over SSH:   sudo docker compose up -d --build
+#
+# Change the two numbers marked (1) if your volumes are not /volume1 only.
+#
+# PeekESP by rhshourav  -  Discord: rhshourav
+#   https://github.com/rhshourav/PeekESP   https://rhshourav.github.io/PeekESP/
+
+services:
+  peekesp:
+    build:
+      context: .
+      args:
+        WITH_SMART: "0"            # "1" only together with the drive block at the bottom
+    image: peekesp-synology:2.0.1
+    container_name: peekesp
+    restart: unless-stopped
+    init: true
+
+    # Host networking is what makes /proc/net/dev the NAS's own interfaces and the
+    # widget feed reachable at the NAS's own address. It also means this container
+    # has no ports: section, and the port below is the real port on the NAS.
+    network_mode: host
+
+    environment:
+      # The two switches. Each is independent; either can be off.
+      PEEK_PUSH: "on"              # relay push: the ESP32 and phone see this NAS from anywhere
+      PEEK_SERVE: "on"             # widget feed: http://<nas>:8080/telemetry on your LAN
+      # The code shown on the device's screen. Dashes and case do not matter.
+      PEEK_PAIR: ""
+      PEEK_PORT: "8080"
+      PEEK_ALLOW: "private"        # private | any | networks like 192.168.1.0/24
+      PEEK_INTERVAL: "5"
+      PEEK_NAME: ""                # blank = the NAS's hostname
+      PEEK_UPS: "off"              # the container cannot see DSM's UPS service
+      PEEK_DRIVE_TEMP: "off"       # turn on only with the drive block below
+
+    volumes:
+      # Settings and open-incident state. Written rarely, never per reading.
+      - peekesp-data:/data
+      # (1) Each volume mounted read-only AT ITS OWN PATH. That is how the agent finds
+      # it: it looks for /volumeN in its own mount table, and a bind mount puts one
+      # there. Nothing is read from these; the agent only asks the filesystem how
+      # full it is (statvfs), which is answered from memory and wakes no drive.
+      - /volume1:/volume1:ro
+      # - /volume2:/volume2:ro
+
+    # Deliberately NOT mounted: /proc and /sys. The container's own /proc already
+    # shows the host's CPU, memory, uptime, RAID (/proc/mdstat) and - with host
+    # networking - its interfaces, and its /sys shows the host's temperature sensors.
+    # A second copy of /proc buys nothing: /proc/self would resolve to the wrong
+    # process and the network counters would break.
+
+    # Hardening: the agent needs none of this, so it has none of it.
+    read_only: true
+    tmpfs:
+      - /tmp                       # the status file (rewritten every ~2 s) lives in RAM
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 96m
+    pids_limit: 64
+
+    # The agent logs only when something changes. This keeps even that from piling up
+    # on a volume under @docker.
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "2"
+
+    # --- Optional: drive temperatures ----------------------------------------------
+    # Needs WITH_SMART: "1" above and PEEK_DRIVE_TEMP: "on". smartctl is run with
+    # `-n standby`, so a drive that is asleep is skipped, never woken - the same
+    # guarantee as the install.sh path. Map every internal drive you want read; the
+    # names are /dev/sata1.. on newer DSM and /dev/sda.. on older.
+    #
+    # user: root
+    # cap_add: [SYS_RAWIO]
+    # devices:
+    #   - /dev/sata1:/dev/sata1
+    #   - /dev/sata2:/dev/sata2
+
+volumes:
+  peekesp-data:
